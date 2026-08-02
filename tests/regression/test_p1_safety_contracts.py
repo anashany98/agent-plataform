@@ -3,14 +3,14 @@ import re
 import uuid
 from pathlib import Path
 
-from fastapi import HTTPException
-
+import pytest
 from app.config import settings
 from app.database import SessionLocal, get_db
 from app.main import app
-from app.models.models import AuditLog, RAGChunk, RAGDocument
+from app.models.models import AuditLog, DailyLLMBudget, RAGChunk, RAGDocument
 from app.services.llm_router import LLMRouterService, ProviderResult
 from app.services.rag_service import RAGService
+from fastapi import HTTPException
 
 
 def test_d013_activepieces_2xx_without_execution_id_is_not_reported_as_success(
@@ -135,6 +135,111 @@ def test_d014_billable_usage_cannot_be_recorded_as_zero_or_bypass_daily_budget(m
         "D-014 reproducido: usage facturable no consume presupuesto; "
         f"first_cost={first_cost}, second_status={second_status}"
     )
+
+
+def test_d014_versioned_catalog_books_real_cost_and_enforces_hard_limit(monkeypatch):
+    db = SessionLocal()
+    correlation_prefix = f"priced-cost-{uuid.uuid4().hex}"
+    router = LLMRouterService(db)
+    monkeypatch.setattr(settings, "LLM_MAX_DAILY_COST_USD", 0.0006)
+    monkeypatch.setattr(settings, "LLM_MAX_OUTPUT_TOKENS", 1)
+    monkeypatch.setattr(
+        settings,
+        "LLM_PRICING_CATALOG_JSON",
+        '{"version":"contract-v1","currency":"USD","models":{'
+        '"openai/synthetic-priced-model":{'
+        '"input_usd_per_million":"1","output_usd_per_million":"1"}}}',
+    )
+    monkeypatch.setattr(
+        router,
+        "_profiles",
+        lambda: {"standard": [{"provider": "openai", "model": "synthetic-priced-model"}]},
+    )
+
+    async def synthetic_provider(_provider, _model, _prompt, _system_prompt):
+        return ProviderResult(
+            content="Respuesta con coste",
+            prompt_tokens=100,
+            completion_tokens=1,
+            provider="openai",
+            model="synthetic-priced-model",
+            raw_usage={"prompt_tokens": 100, "completion_tokens": 1},
+        )
+
+    monkeypatch.setattr(router, "_call_provider", synthetic_provider)
+    db.query(DailyLLMBudget).delete(synchronize_session=False)
+    db.commit()
+    try:
+        first = asyncio.run(
+            router.generate_response(
+                "x",
+                correlation_id=f"{correlation_prefix}-1",
+            )
+        )
+        with pytest.raises(HTTPException) as second_error:
+            asyncio.run(
+                router.generate_response(
+                    "x",
+                    correlation_id=f"{correlation_prefix}-2",
+                )
+            )
+
+        ledger = db.query(DailyLLMBudget).one()
+        assert first["estimated_cost_usd"] == 0.000101
+        assert float(ledger.spent_usd) == 0.000101
+        assert second_error.value.status_code == 429
+    finally:
+        db.rollback()
+        db.query(AuditLog).filter(AuditLog.correlation_id.like(f"{correlation_prefix}%")).delete(
+            synchronize_session=False
+        )
+        db.query(DailyLLMBudget).delete(synchronize_session=False)
+        db.commit()
+        db.close()
+
+
+def test_d014_external_provider_without_usage_fails_closed(monkeypatch):
+    db = SessionLocal()
+    correlation_id = f"missing-usage-{uuid.uuid4().hex}"
+    router = LLMRouterService(db)
+    monkeypatch.setattr(settings, "LLM_MAX_DAILY_COST_USD", 1.0)
+    monkeypatch.setattr(settings, "LLM_MAX_OUTPUT_TOKENS", 1)
+    monkeypatch.setattr(
+        settings,
+        "LLM_PRICING_CATALOG_JSON",
+        '{"version":"contract-v1","currency":"USD","models":{'
+        '"openai/synthetic-no-usage":{'
+        '"input_usd_per_million":"1","output_usd_per_million":"1"}}}',
+    )
+    monkeypatch.setattr(
+        router,
+        "_profiles",
+        lambda: {"standard": [{"provider": "openai", "model": "synthetic-no-usage"}]},
+    )
+
+    async def provider_without_usage(_provider, _model, _prompt, _system_prompt):
+        return ProviderResult(
+            content="No debe publicarse",
+            prompt_tokens=0,
+            completion_tokens=0,
+            provider="openai",
+            model="synthetic-no-usage",
+            raw_usage={},
+        )
+
+    monkeypatch.setattr(router, "_call_provider", provider_without_usage)
+    try:
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(router.generate_response("x", correlation_id=correlation_id))
+        audit = db.query(AuditLog).filter(AuditLog.correlation_id == correlation_id).one()
+        assert error.value.status_code == 502
+        assert audit.status == "usage_missing"
+    finally:
+        db.rollback()
+        db.query(AuditLog).filter(AuditLog.correlation_id == correlation_id).delete()
+        db.query(DailyLLMBudget).delete(synchronize_session=False)
+        db.commit()
+        db.close()
 
 
 def test_d020_public_role_cannot_exfiltrate_document_without_explicit_acl(tmp_path):

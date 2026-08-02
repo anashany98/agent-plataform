@@ -7,6 +7,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKeyConstraint,
@@ -107,8 +108,31 @@ class AuditLog(InstallationOwnedMixin, Base):
     details = Column(JSON, nullable=True)
 
 
+class DailyLLMBudget(InstallationOwnedMixin, Base):
+    __tablename__ = "daily_llm_budgets"
+    __table_args__ = (
+        CheckConstraint("spent_usd >= 0", name="ck_daily_llm_budget_spent_nonnegative"),
+    )
+
+    installation_id = Column(
+        String(128),
+        primary_key=True,
+        nullable=False,
+        default=get_current_installation_id,
+    )
+    budget_date = Column(Date, primary_key=True, nullable=False)
+    spent_usd = Column(Numeric(14, 6), default=0, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class IdempotencyRecord(InstallationOwnedMixin, Base):
     __tablename__ = "idempotency_records"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('processing','completed','failed')",
+            name="ck_idempotency_record_state",
+        ),
+    )
 
     installation_id = Column(
         String(128),
@@ -118,6 +142,15 @@ class IdempotencyRecord(InstallationOwnedMixin, Base):
     )
     idempotency_key = Column(String, primary_key=True)
     created_at = Column(DateTime, default=utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    state = Column(String(32), default="completed", nullable=False)
+    owner_id = Column(String(64), nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    heartbeat_at = Column(DateTime, nullable=True)
+    event_payload = Column(JSON, nullable=True)
+    request_fingerprint = Column(String(64), nullable=True)
+    attempt_count = Column(Integer, default=0, nullable=False)
+    last_error = Column(JSON, nullable=True)
     response_body = Column(JSON, nullable=True)
     status_code = Column(Integer, default=200, nullable=False)
 

@@ -48,7 +48,11 @@ def parse_import_file(filename: str, content: bytes, max_rows: int = 10_000) -> 
             raise ImportValidationError("El archivo XLSX está vacío") from exc
         if not all(headers) or len(set(headers)) != len(headers):
             raise ImportValidationError("La cabecera contiene nombres vacíos o duplicados")
-        rows = [dict(zip(headers, row)) for row in values if any(value not in (None, "") for value in row)]
+        rows = [
+            dict(zip(headers, row, strict=False))
+            for row in values
+            if any(value not in (None, "") for value in row)
+        ]
     elif lower.endswith(".json"):
         payload = json.loads(content.decode("utf-8"))
         if isinstance(payload, dict):
@@ -71,7 +75,14 @@ class ImportService:
     def __init__(self, db: Session):
         self.db = db
 
-    def process(self, entity_type: str, items: Iterable[Dict[str, Any]], dry_run: bool = False) -> Dict[str, Any]:
+    def process(
+        self,
+        entity_type: str,
+        items: Iterable[Dict[str, Any]],
+        dry_run: bool = False,
+        *,
+        commit: bool = True,
+    ) -> Dict[str, Any]:
         if entity_type not in self.SUPPORTED:
             raise ImportValidationError("Tipo de entidad no soportado")
         normalized_items = list(items)
@@ -192,7 +203,10 @@ class ImportService:
                     updated += 1
                 else:
                     self.db.add(prepared_item)
-            self.db.commit()
+            if commit:
+                self.db.commit()
+            else:
+                self.db.flush()
             return {
                 "status": "success",
                 "imported_count": len(prepared) if entity_type != "stock" else 0,

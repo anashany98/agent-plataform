@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -11,16 +12,19 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import create_engine, func, inspect, select, text
+from fastapi import HTTPException
+from sqlalchemy import create_engine, func, inspect, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
+from app.config import settings
 from app.installation_context import installation_scope
 from app.models.models import (
     ApprovalRequest,
     AuditLog,
     Customer,
+    DailyLLMBudget,
     InvoiceDraft,
     Order,
     Pricelist,
@@ -30,6 +34,7 @@ from app.models.models import (
     User,
 )
 from app.services.deterministic_tools import DeterministicToolsService, InsufficientStockError
+from app.services.llm_router import LLMRouterService, ProviderResult
 
 
 def _required_environment(name: str) -> str:
@@ -80,6 +85,7 @@ def _cleanup_verification_data(engine, installation_ids: tuple[str, str]) -> Non
     # Exact installation-scoped cleanup. The run-bound database guard above
     # prevents this verifier from ever targeting an operational installation.
     tables = (
+        "daily_llm_budgets",
         "rag_chunks",
         "conversation_states",
         "stock_reservations",
@@ -99,9 +105,12 @@ def _cleanup_verification_data(engine, installation_ids: tuple[str, str]) -> Non
         "local_installation": installation_ids[0],
         "foreign_installation": installation_ids[1],
     }
+    existing_tables = set(inspect(engine).get_table_names())
     with engine.begin() as connection:
         connection.execute(text("SET CONSTRAINTS ALL DEFERRED"))
         for table_name in tables:
+            if table_name not in existing_tables:
+                continue
             connection.execute(
                 text(
                     f'DELETE FROM "{table_name}" '
@@ -177,6 +186,198 @@ def _create_reservation_pair(
             }
         finally:
             session.close()
+
+
+def _verify_llm_budget_concurrency(
+    session_factory,
+    installation_id: str,
+    suffix: str,
+) -> dict[str, object]:
+    original_values = {
+        "LLM_MAX_DAILY_COST_USD": settings.LLM_MAX_DAILY_COST_USD,
+        "LLM_MAX_OUTPUT_TOKENS": settings.LLM_MAX_OUTPUT_TOKENS,
+        "LLM_PRICING_CATALOG_JSON": settings.LLM_PRICING_CATALOG_JSON,
+    }
+    settings.LLM_MAX_DAILY_COST_USD = 0.0006
+    settings.LLM_MAX_OUTPUT_TOKENS = 1
+    settings.LLM_PRICING_CATALOG_JSON = json.dumps(
+        {
+            "version": "postgres-concurrency-v1",
+            "currency": "USD",
+            "models": {
+                "openai/postgres-synthetic": {
+                    "input_usd_per_million": "1",
+                    "output_usd_per_million": "1",
+                }
+            },
+        }
+    )
+    start_barrier = threading.Barrier(2, timeout=10)
+    provider_calls: list[str] = []
+    provider_lock = threading.Lock()
+
+    class SyntheticRouter(LLMRouterService):
+        def _profiles(self):
+            return {
+                "standard": [
+                    {"provider": "openai", "model": "postgres-synthetic"}
+                ]
+            }
+
+        async def _call_provider(self, provider, model, prompt, system_prompt):
+            del prompt, system_prompt
+            with provider_lock:
+                provider_calls.append(model)
+            await asyncio.sleep(0.05)
+            return ProviderResult(
+                content="Respuesta sintética PostgreSQL",
+                prompt_tokens=100,
+                completion_tokens=1,
+                provider=provider,
+                model=model,
+                raw_usage={"prompt_tokens": 100, "completion_tokens": 1},
+            )
+
+    def consume(index: int) -> str:
+        with installation_scope(installation_id):
+            session = session_factory()
+            try:
+                start_barrier.wait()
+                asyncio.run(
+                    SyntheticRouter(session).generate_response(
+                        "x",
+                        correlation_id=f"p1-budget-{suffix}-{index}",
+                    )
+                )
+                return "success"
+            except HTTPException as exc:
+                return f"http-{exc.status_code}"
+            finally:
+                session.close()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(consume, (1, 2)))
+        with installation_scope(installation_id):
+            session = session_factory()
+            try:
+                ledger = session.query(DailyLLMBudget).one()
+                successful_audits = session.query(AuditLog).filter(
+                    AuditLog.correlation_id.like(f"p1-budget-{suffix}-%"),
+                    AuditLog.status == "success",
+                ).count()
+                spent_usd = Decimal(ledger.spent_usd)
+            finally:
+                session.close()
+        _require(
+            sorted(outcomes) == ["http-429", "success"],
+            "daily LLM budget race did not admit exactly one call",
+            outcomes,
+        )
+        _require(len(provider_calls) == 1, "budget race invoked the provider more than once", provider_calls)
+        _require(successful_audits == 1, "budget race wrote an unexpected success count", successful_audits)
+        _require(spent_usd == Decimal("0.000101"), "budget ledger recorded the wrong cost", spent_usd)
+        return {
+            "attempts": len(outcomes),
+            "provider_calls": len(provider_calls),
+            "successful": 1,
+            "rate_limited": 1,
+            "spent_usd": str(spent_usd),
+        }
+    finally:
+        for name, value in original_values.items():
+            setattr(settings, name, value)
+
+
+def _verify_approval_cas(
+    session_factory,
+    installation_id: str,
+    suffix: str,
+) -> dict[str, object]:
+    approval_id = f"p1-approval-cas-{suffix}"
+    correlation_id = f"p1-approval-cas-audit-{suffix}"
+    with installation_scope(installation_id):
+        session = session_factory()
+        try:
+            session.add(
+                ApprovalRequest(
+                    id=approval_id,
+                    action_type="postgres_cas_contract",
+                    target_key=f"p1-approval-target-{suffix}",
+                    payload={},
+                    status="pending",
+                )
+            )
+            session.commit()
+        finally:
+            session.close()
+
+    start_barrier = threading.Barrier(2, timeout=10)
+
+    def decide(status: str) -> str:
+        with installation_scope(installation_id):
+            session = session_factory()
+            try:
+                start_barrier.wait()
+                result = session.execute(
+                    update(ApprovalRequest)
+                    .where(
+                        ApprovalRequest.id == approval_id,
+                        ApprovalRequest.status == "pending",
+                    )
+                    .values(
+                        status=status,
+                        reviewed_at=datetime.now(UTC).replace(tzinfo=None),
+                        reviewed_by=f"postgres-{status}",
+                    )
+                )
+                if result.rowcount != 1:
+                    session.rollback()
+                    return "conflict"
+                session.add(
+                    AuditLog(
+                        correlation_id=correlation_id,
+                        agent_id="system",
+                        event_type="approval",
+                        provider="internal",
+                        model_name="deterministic",
+                        status="success",
+                        details={"approval_id": approval_id, "decision": status},
+                    )
+                )
+                session.commit()
+                return status
+            finally:
+                session.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(decide, ("approved", "rejected")))
+    with installation_scope(installation_id):
+        session = session_factory()
+        try:
+            final_status = session.scalar(
+                select(ApprovalRequest.status).where(ApprovalRequest.id == approval_id)
+            )
+            audit_count = session.scalar(
+                select(func.count())
+                .select_from(AuditLog)
+                .where(AuditLog.correlation_id == correlation_id)
+            )
+        finally:
+            session.close()
+    _require(outcomes.count("conflict") == 1, "approval CAS did not reject one contender", outcomes)
+    _require(
+        final_status in {"approved", "rejected"} and final_status in outcomes,
+        "approval CAS persisted an invalid decision",
+        {"outcomes": outcomes, "final_status": final_status},
+    )
+    _require(audit_count == 1, "approval CAS did not persist exactly one audit", audit_count)
+    return {
+        "attempts": len(outcomes),
+        "winner": final_status,
+        "conflicts": outcomes.count("conflict"),
+        "audits": audit_count,
+    }
 
 
 def _assert_race_inventory(
@@ -675,6 +876,16 @@ def _run_verification(engine, installation_id: str) -> dict[str, object]:
         release_expire_fixture,
         {"released", "expired"},
     )
+    llm_budget = _verify_llm_budget_concurrency(
+        session_factory,
+        installation_id,
+        suffix,
+    )
+    approval_cas = _verify_approval_cas(
+        session_factory,
+        installation_id,
+        suffix,
+    )
 
     return {
         "status": "verified",
@@ -699,6 +910,8 @@ def _run_verification(engine, installation_id: str) -> dict[str, object]:
             "release_cancel": release_cancel_status,
             "release_expire": release_expire_status,
         },
+        "llm_budget": llm_budget,
+        "approval_cas": approval_cas,
         "tenant_isolation": {
             "composite_foreign_keys": len(inspected_foreign_keys),
             "cross_installation_fk_rejected": cross_installation_fk_rejected,

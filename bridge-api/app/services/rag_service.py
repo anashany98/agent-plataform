@@ -3,7 +3,6 @@ import hashlib
 import math
 import mimetypes
 import re
-import shutil
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -305,7 +304,7 @@ class RAGService:
                 )
             )
         self.db.flush()
-        for index, (chunk, vector) in enumerate(zip(chunks, vectors)):
+        for index, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
             self.db.add(
                 RAGChunk(
                     id=f"{doc_id}-chunk-{index}",
@@ -337,7 +336,12 @@ class RAGService:
         if document is None:
             return False
         allowed = (document.metadata_json or {}).get("allowed_roles")
-        return not allowed or (role is not None and role in allowed)
+        return (
+            isinstance(allowed, list)
+            and bool(allowed)
+            and role is not None
+            and role in allowed
+        )
 
     async def search(self, query: str, top_k: int = 3, min_score: float | None = None, role: str | None = None) -> Dict[str, Any]:
         clean_query = query.strip()
@@ -366,7 +370,10 @@ class RAGService:
         if provider == "local_tfidf":
             document_vectors, local_query = self._local_tfidf_vectors([chunk.text for chunk in readable], clean_query)
             query_vector = local_query or []
-            scored = [(self._cosine(query_vector, vector), chunk) for vector, chunk in zip(document_vectors, readable)]
+            scored = [
+                (self._cosine(query_vector, vector), chunk)
+                for vector, chunk in zip(document_vectors, readable, strict=True)
+            ]
         else:
             query_vector = (await self._remote_embeddings([clean_query]))[0]
             dialect = self.db.get_bind().dialect.name
@@ -451,7 +458,7 @@ class RAGService:
     def _cosine(a: List[float], b: List[float]) -> float:
         if not a or not b or len(a) != len(b):
             return 0.0
-        dot = sum(x * y for x, y in zip(a, b))
+        dot = sum(x * y for x, y in zip(a, b, strict=True))
         norm_a = math.sqrt(sum(x * x for x in a))
         norm_b = math.sqrt(sum(y * y for y in b))
         return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0

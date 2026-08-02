@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     CHATWOOT_BASE_URL: str = os.getenv("CHATWOOT_BASE_URL", "http://chatwoot-web:3000")
     CHATWOOT_API_TOKEN: str = os.getenv("CHATWOOT_API_TOKEN", "")
     CHATWOOT_WEBHOOK_SECRET: str = os.getenv("CHATWOOT_WEBHOOK_SECRET", "")
+    CHATWOOT_HANDOFF_TEAM_ID: int = int(os.getenv("CHATWOOT_HANDOFF_TEAM_ID", "0"))
+    CHATWOOT_HANDOFF_ASSIGNEE_ID: int = int(os.getenv("CHATWOOT_HANDOFF_ASSIGNEE_ID", "0"))
     WEBHOOK_TIMESTAMP_TOLERANCE_SEC: int = int(os.getenv("WEBHOOK_TIMESTAMP_TOLERANCE_SEC", "300"))
 
     FLOWWINK_BASE_URL: str = os.getenv("FLOWWINK_BASE_URL", "http://flowwink-app:80")
@@ -70,8 +72,20 @@ class Settings(BaseSettings):
     CRITICAL_LLM_MODEL: str = os.getenv("CRITICAL_LLM_MODEL", "")
     LLM_REQUEST_TIMEOUT_SEC: float = float(os.getenv("LLM_REQUEST_TIMEOUT_SEC", "60"))
     LLM_MAX_DAILY_COST_USD: float = float(os.getenv("LLM_MAX_DAILY_COST_USD", "25"))
+    LLM_MAX_INPUT_BYTES: PositiveInt = int(os.getenv("LLM_MAX_INPUT_BYTES", "131072"))
+    LLM_MAX_OUTPUT_TOKENS: PositiveInt = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1024"))
     ALLOW_MOCK_LLM: bool = _bool("ALLOW_MOCK_LLM", "false")
     ALLOW_INTEGRATION_STUBS: bool = _bool("ALLOW_INTEGRATION_STUBS", "false")
+    INTEGRATION_RETRY_ATTEMPTS: PositiveInt = int(os.getenv("INTEGRATION_RETRY_ATTEMPTS", "3"))
+    INTEGRATION_RETRY_BASE_DELAY_SEC: float = float(
+        os.getenv("INTEGRATION_RETRY_BASE_DELAY_SEC", "0.25")
+    )
+    INTEGRATION_RETRY_MAX_DELAY_SEC: float = float(
+        os.getenv("INTEGRATION_RETRY_MAX_DELAY_SEC", "2.0")
+    )
+    IDEMPOTENCY_LEASE_SEC: PositiveInt = int(os.getenv("IDEMPOTENCY_LEASE_SEC", "300"))
+    IDEMPOTENCY_MAX_ATTEMPTS: PositiveInt = int(os.getenv("IDEMPOTENCY_MAX_ATTEMPTS", "8"))
+    LLM_PRICING_CATALOG_JSON: str = os.getenv("LLM_PRICING_CATALOG_JSON", "")
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
@@ -130,6 +144,7 @@ class Settings(BaseSettings):
         required = {
             "AUTH_SECRET": self.AUTH_SECRET,
             "INITIAL_ADMIN_PASSWORD": self.INITIAL_ADMIN_PASSWORD,
+            "CHATWOOT_API_TOKEN": self.CHATWOOT_API_TOKEN,
             "CHATWOOT_WEBHOOK_SECRET": self.CHATWOOT_WEBHOOK_SECRET,
         }
         invalid_markers = ("replace", "changeme", "development", "dev_secret", "mock", "reemplazar")
@@ -145,6 +160,30 @@ class Settings(BaseSettings):
             errors.append("ALLOW_DEMO_DATA")
         if self.AUTO_SEED_DEMO_DATA:
             errors.append("AUTO_SEED_DEMO_DATA")
+        if self.INTEGRATION_RETRY_ATTEMPTS > 8:
+            errors.append("INTEGRATION_RETRY_ATTEMPTS")
+        if (
+            self.INTEGRATION_RETRY_BASE_DELAY_SEC < 0
+            or self.INTEGRATION_RETRY_MAX_DELAY_SEC < self.INTEGRATION_RETRY_BASE_DELAY_SEC
+        ):
+            errors.append("INTEGRATION_RETRY_DELAY")
+        if self.IDEMPOTENCY_LEASE_SEC < 30 or self.IDEMPOTENCY_MAX_ATTEMPTS > 20:
+            errors.append("IDEMPOTENCY_LEASE/ATTEMPTS")
+        if self.LLM_MAX_DAILY_COST_USD <= 0 or self.LLM_MAX_OUTPUT_TOKENS > 32768:
+            errors.append("LLM_BUDGET/TOKEN_LIMIT")
+        configured_external_model = any(
+            provider.strip().lower() not in {"", "ollama", "mock"} and bool(model.strip())
+            for provider, model in (
+                (self.CHEAP_LLM_PROVIDER, self.CHEAP_LLM_MODEL),
+                (self.STANDARD_LLM_PROVIDER, self.STANDARD_LLM_MODEL),
+                (self.ADVANCED_LLM_PROVIDER, self.ADVANCED_LLM_MODEL),
+                (self.CRITICAL_LLM_PROVIDER, self.CRITICAL_LLM_MODEL),
+            )
+        )
+        if configured_external_model and not self.LLM_PRICING_CATALOG_JSON.strip():
+            errors.append("LLM_PRICING_CATALOG_JSON")
+        if self.CHATWOOT_HANDOFF_TEAM_ID <= 0 and self.CHATWOOT_HANDOFF_ASSIGNEE_ID <= 0:
+            errors.append("CHATWOOT_HANDOFF_TEAM_ID/CHATWOOT_HANDOFF_ASSIGNEE_ID")
         if errors:
             raise RuntimeError("Configuración insegura para producción: " + ", ".join(errors))
 

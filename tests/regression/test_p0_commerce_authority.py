@@ -75,6 +75,9 @@ def test_p0_pricing_applies_selected_combination_and_its_specific_price():
     product = _new_product(
         source="prestashop",
         attributes={
+            "active": True,
+            "show_price": True,
+            "available_for_order": True,
             "combinations": [
                 {
                     "id": combination_id,

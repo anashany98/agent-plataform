@@ -43,6 +43,8 @@ class InsufficientStockError(BusinessRuleError):
 
 
 class DeterministicToolsService:
+    _PRESTASHOP_COMMERCE_FLAGS = ("active", "show_price", "available_for_order")
+
     def __init__(
         self,
         db: Session,
@@ -81,6 +83,20 @@ class DeterministicToolsService:
     @staticmethod
     def _local_product_clause():
         return func.lower(func.trim(Product.source)) == "local"
+
+    @classmethod
+    def _is_product_commercially_available(cls, product: Product) -> bool:
+        if str(product.source or "").strip().lower() != "prestashop":
+            return True
+        attributes = product.attributes
+        return isinstance(attributes, dict) and all(
+            attributes.get(field) is True for field in cls._PRESTASHOP_COMMERCE_FLAGS
+        )
+
+    @classmethod
+    def _require_product_commercially_available(cls, product: Product) -> None:
+        if not cls._is_product_commercially_available(product):
+            raise BusinessRuleError(f"Producto {product.id} no encontrado")
 
     @staticmethod
     def _confirmation_payload_hash(
@@ -126,8 +142,13 @@ class DeterministicToolsService:
         if not include_demo:
             product_query = product_query.filter(self._non_demo_product_clause())
         if not query.strip():
-            products = product_query.order_by(Product.name.asc()).limit(safe_limit).all()
-            return [self._product_dict(product) for product in products]
+            products = product_query.order_by(Product.name.asc()).limit(5_000).all()
+            visible_products = [
+                product
+                for product in products
+                if self._is_product_commercially_available(product)
+            ]
+            return [self._product_dict(product) for product in visible_products[:safe_limit]]
 
         normalized_query = self._normalize_search_text(query)
         stopwords = {
@@ -147,6 +168,8 @@ class DeterministicToolsService:
         candidates = product_query.order_by(Product.name.asc()).limit(5_000).all()
         scored: List[tuple[int, str, Product]] = []
         for product in candidates:
+            if not self._is_product_commercially_available(product):
+                continue
             attributes = json.dumps(product.attributes or {}, ensure_ascii=False, sort_keys=True)
             name = self._normalize_search_text(product.name)
             sku = self._normalize_search_text(product.sku)
@@ -184,10 +207,12 @@ class DeterministicToolsService:
         product = query.first()
         if not product:
             raise BusinessRuleError(f"Producto {product_id} no encontrado")
+        self._require_product_commercially_available(product)
         return self._product_dict(product)
 
-    @staticmethod
-    def _product_dict(product: Product) -> Dict[str, Any]:
+    @classmethod
+    def _product_dict(cls, product: Product) -> Dict[str, Any]:
+        cls._require_product_commercially_available(product)
         return {
             "id": product.id,
             "external_id": product.external_id,
@@ -236,6 +261,7 @@ class DeterministicToolsService:
         ).first()
         if not product:
             raise BusinessRuleError(f"Producto {product_id} no encontrado")
+        self._require_product_commercially_available(product)
 
         customer = None
         discount = Decimal("0")
@@ -548,7 +574,7 @@ class DeterministicToolsService:
             Product.id == product_id,
             self._non_demo_product_clause(),
         ).first()
-        if not product:
+        if not product or not self._is_product_commercially_available(product):
             return {"product_id": product_id, "available": False, "stock_quantity": 0, "available_stock": 0}
         if str(product.source).strip().lower() != "local":
             return {

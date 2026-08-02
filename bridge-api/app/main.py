@@ -11,8 +11,9 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import text
+from sqlalchemy import or_, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -210,7 +211,16 @@ def verify_hmac_signature(raw_body: bytes, signature_header: Optional[str], time
     return hmac.compare_digest(expected, supplied)
 
 
-def _audit(db: Session, *, event_type: str, status_value: str, details: Dict[str, Any], principal: Principal | None = None, correlation_id: str | None = None) -> None:
+def _audit(
+    db: Session,
+    *,
+    event_type: str,
+    status_value: str,
+    details: Dict[str, Any],
+    principal: Principal | None = None,
+    correlation_id: str | None = None,
+    commit: bool = True,
+) -> None:
     db.add(
         AuditLog(
             correlation_id=correlation_id or str(uuid.uuid4()),
@@ -223,23 +233,92 @@ def _audit(db: Session, *, event_type: str, status_value: str, details: Dict[str
             details=details,
         )
     )
-    db.commit()
+    if commit:
+        db.commit()
 
 
-def _claim_idempotency(db: Session, key: str) -> tuple[bool, IdempotencyRecord | None]:
+def _idempotency_fingerprint(payload: Dict[str, Any] | None) -> str | None:
+    if payload is None:
+        return None
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _claim_idempotency(
+    db: Session,
+    key: str,
+    payload: Dict[str, Any] | None = None,
+) -> tuple[bool, IdempotencyRecord | None]:
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    fingerprint = _idempotency_fingerprint(payload)
     existing = db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == key).first()
-    if existing and existing.status_code == 102:
-        created_at = existing.created_at
-        if created_at is not None:
-            if created_at.tzinfo is None:
-                created_at = created_at.replace(tzinfo=datetime.UTC)
-            if datetime.datetime.now(datetime.UTC) - created_at > datetime.timedelta(minutes=5):
-                db.delete(existing)
-                db.commit()
-                existing = None
     if existing:
-        return False, existing
-    record = IdempotencyRecord(idempotency_key=key, response_body={"status": "processing"}, status_code=102)
+        if existing.request_fingerprint and fingerprint and existing.request_fingerprint != fingerprint:
+            raise HTTPException(status_code=409, detail="Idempotency-Key reutilizada con un payload diferente")
+        if existing.state == "completed" and existing.status_code != 102:
+            return False, existing
+        lease_is_live = (
+            existing.state == "processing"
+            and bool(existing.owner_id)
+            and existing.lease_expires_at is not None
+            and existing.lease_expires_at > now
+        )
+        if lease_is_live:
+            return False, existing
+        if existing.attempt_count >= settings.IDEMPOTENCY_MAX_ATTEMPTS:
+            raise HTTPException(
+                status_code=503,
+                detail="La operación agotó sus reintentos idempotentes y requiere intervención",
+            )
+
+        owner_id = uuid.uuid4().hex
+        lease_expires_at = now + datetime.timedelta(seconds=settings.IDEMPOTENCY_LEASE_SEC)
+        takeover = db.execute(
+            update(IdempotencyRecord)
+            .where(
+                IdempotencyRecord.idempotency_key == key,
+                or_(
+                    IdempotencyRecord.state == "failed",
+                    IdempotencyRecord.status_code == 102,
+                ),
+                or_(
+                    IdempotencyRecord.state == "failed",
+                    IdempotencyRecord.owner_id.is_(None),
+                    IdempotencyRecord.lease_expires_at.is_(None),
+                    IdempotencyRecord.lease_expires_at <= now,
+                ),
+            )
+            .values(
+                state="processing",
+                status_code=102,
+                owner_id=owner_id,
+                lease_expires_at=lease_expires_at,
+                heartbeat_at=now,
+                updated_at=now,
+                event_payload=payload if payload is not None else existing.event_payload,
+                request_fingerprint=fingerprint or existing.request_fingerprint,
+                attempt_count=IdempotencyRecord.attempt_count + 1,
+                last_error=None,
+            )
+        )
+        db.commit()
+        refreshed = db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == key).first()
+        return takeover.rowcount == 1, refreshed
+
+    owner_id = uuid.uuid4().hex
+    record = IdempotencyRecord(
+        idempotency_key=key,
+        updated_at=now,
+        state="processing",
+        owner_id=owner_id,
+        lease_expires_at=now + datetime.timedelta(seconds=settings.IDEMPOTENCY_LEASE_SEC),
+        heartbeat_at=now,
+        event_payload=payload,
+        request_fingerprint=fingerprint,
+        attempt_count=1,
+        response_body={"status": "processing"},
+        status_code=102,
+    )
     db.add(record)
     try:
         db.commit()
@@ -249,21 +328,108 @@ def _claim_idempotency(db: Session, key: str) -> tuple[bool, IdempotencyRecord |
         return False, db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == key).first()
 
 
-def _complete_idempotency(db: Session, key: str, response: Dict[str, Any], status_code: int = 200) -> None:
-    record = db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == key).first()
-    if record:
-        record.response_body = response
-        record.status_code = status_code
-    else:
-        db.add(IdempotencyRecord(idempotency_key=key, response_body=response, status_code=status_code))
+def _heartbeat_idempotency(db: Session, key: str, owner_id: str) -> None:
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    heartbeat = db.execute(
+        update(IdempotencyRecord)
+        .where(
+            IdempotencyRecord.idempotency_key == key,
+            IdempotencyRecord.state == "processing",
+            IdempotencyRecord.owner_id == owner_id,
+        )
+        .values(
+            heartbeat_at=now,
+            lease_expires_at=now + datetime.timedelta(seconds=settings.IDEMPOTENCY_LEASE_SEC),
+            updated_at=now,
+        )
+    )
+    if heartbeat.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="El worker perdió el lease de idempotencia")
     db.commit()
 
 
-def _release_idempotency(db: Session, key: str) -> None:
-    db.query(IdempotencyRecord).filter(
-        IdempotencyRecord.idempotency_key == key,
-        IdempotencyRecord.status_code == 102,
-    ).delete()
+def _checkpoint_idempotency(
+    db: Session,
+    key: str,
+    owner_id: str,
+    response: Dict[str, Any],
+) -> None:
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    checkpoint = db.execute(
+        update(IdempotencyRecord)
+        .where(
+            IdempotencyRecord.idempotency_key == key,
+            IdempotencyRecord.state == "processing",
+            IdempotencyRecord.owner_id == owner_id,
+        )
+        .values(
+            response_body=response,
+            heartbeat_at=now,
+            lease_expires_at=now + datetime.timedelta(seconds=settings.IDEMPOTENCY_LEASE_SEC),
+            updated_at=now,
+        )
+    )
+    if checkpoint.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="No se pudo guardar el checkpoint idempotente")
+    db.commit()
+
+
+def _complete_idempotency(
+    db: Session,
+    key: str,
+    owner_id: str,
+    response: Dict[str, Any],
+    status_code: int = 200,
+    *,
+    commit: bool = True,
+) -> None:
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    completed = db.execute(
+        update(IdempotencyRecord)
+        .where(
+            IdempotencyRecord.idempotency_key == key,
+            IdempotencyRecord.state == "processing",
+            IdempotencyRecord.owner_id == owner_id,
+        )
+        .values(
+            state="completed",
+            owner_id=None,
+            lease_expires_at=None,
+            heartbeat_at=now,
+            updated_at=now,
+            response_body=response,
+            status_code=status_code,
+            last_error=None,
+        )
+    )
+    if completed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="No se pudo completar la operación idempotente")
+    if commit:
+        db.commit()
+
+
+def _fail_idempotency(db: Session, key: str, owner_id: str, error: Exception, status_code: int = 500) -> None:
+    db.rollback()
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    db.execute(
+        update(IdempotencyRecord)
+        .where(
+            IdempotencyRecord.idempotency_key == key,
+            IdempotencyRecord.state == "processing",
+            IdempotencyRecord.owner_id == owner_id,
+        )
+        .values(
+            state="failed",
+            lease_expires_at=now,
+            heartbeat_at=now,
+            updated_at=now,
+            status_code=status_code,
+            last_error={"type": type(error).__name__, "message": str(error)[:2000]},
+        )
+    )
     db.commit()
 
 
@@ -502,6 +668,11 @@ def update_user(
     return {"id": user.id, "username": user.username, "role": user.role, "is_active": user.is_active}
 
 
+@app.get("/live", tags=["Sistema"])
+def get_live():
+    return {"status": "alive", "service": "bridge-api"}
+
+
 @app.get("/health", tags=["Sistema"])
 def get_health(db: Session = Depends(get_db)):
     try:
@@ -607,26 +778,38 @@ async def receive_chatwoot_webhook(
     # The authenticated payload is the replay boundary. X-Chatwoot-Delivery is
     # not covered by the HMAC and therefore cannot select the idempotency key.
     idempotency_key = f"chatwoot:{account_hint}:{message_id}"
-    claimed, existing = _claim_idempotency(db, idempotency_key)
+    claimed, existing = _claim_idempotency(db, idempotency_key, body)
     if not claimed:
+        if existing and existing.state != "completed":
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "status": "processing",
+                    "idempotency_key": message_id,
+                    "attempt_count": existing.attempt_count,
+                },
+            )
         return {
             "status": "duplicate_ignored",
             "idempotency_key": message_id,
             "original_response": existing.response_body if existing else None,
         }
+    if existing is None or not existing.owner_id:
+        raise HTTPException(status_code=503, detail="No se pudo adquirir el lease del webhook")
+    claim_owner = existing.owner_id
 
     try:
         event = body.get("event")
         if event != "message_created":
             result = {"status": "received", "event": event}
-            _complete_idempotency(db, idempotency_key, result)
+            _complete_idempotency(db, idempotency_key, claim_owner, result)
             return result
 
         message_type = body.get("message_type")
         content = str(body.get("content") or "").strip()
         if message_type == "outgoing" or body.get("private") or not content:
             result = {"status": "processed", "action": "ignored"}
-            _complete_idempotency(db, idempotency_key, result)
+            _complete_idempotency(db, idempotency_key, claim_owner, result)
             return result
 
         conversation = body.get("conversation") or {}
@@ -636,10 +819,12 @@ async def receive_chatwoot_webhook(
             raise HTTPException(status_code=422, detail="Faltan account.id o conversation.id")
 
         tools = DeterministicToolsService(db)
+        _heartbeat_idempotency(db, idempotency_key, claim_owner)
         lowered = content.lower()
         confirmation_token = _extract_confirmation_token(content)
         if any(term in lowered for term in ("humano", "persona", "comercial")):
             await chatwoot_adapter.toggle_human_handoff(int(account_id), int(conversation_id), "open")
+            await chatwoot_adapter.assign_human_handoff(int(account_id), int(conversation_id))
             await chatwoot_adapter.add_private_note(int(account_id), int(conversation_id), "El cliente ha solicitado atención humana.")
             reply = "Te he transferido al equipo comercial. Te atenderán lo antes posible."
             await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
@@ -815,6 +1000,7 @@ async def receive_chatwoot_webhook(
                     )
                     await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
                     await chatwoot_adapter.toggle_human_handoff(int(account_id), int(conversation_id), "open")
+                    await chatwoot_adapter.assign_human_handoff(int(account_id), int(conversation_id))
                     await chatwoot_adapter.add_private_note(
                         int(account_id),
                         int(conversation_id),
@@ -822,25 +1008,26 @@ async def receive_chatwoot_webhook(
                     )
                     result = {"status": "success", "action": "insufficient_evidence_handoff", "reply": reply}
 
-        _complete_idempotency(db, idempotency_key, result)
+        _heartbeat_idempotency(db, idempotency_key, claim_owner)
+        _complete_idempotency(db, idempotency_key, claim_owner, result)
         return result
     except (ChatwootIntegrationError, GHLIntegrationError) as exc:
-        _release_idempotency(db, idempotency_key)
+        _fail_idempotency(db, idempotency_key, claim_owner, exc, 502)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except PrestaShopIntegrationError as exc:
-        _release_idempotency(db, idempotency_key)
+        _fail_idempotency(db, idempotency_key, claim_owner, exc, 503)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except InsufficientStockError as exc:
-        _release_idempotency(db, idempotency_key)
+        _fail_idempotency(db, idempotency_key, claim_owner, exc, 409)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except BusinessRuleError as exc:
-        _release_idempotency(db, idempotency_key)
+        _fail_idempotency(db, idempotency_key, claim_owner, exc, 422)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except HTTPException:
-        _release_idempotency(db, idempotency_key)
+    except HTTPException as exc:
+        _fail_idempotency(db, idempotency_key, claim_owner, exc, exc.status_code)
         raise
-    except Exception:
-        _release_idempotency(db, idempotency_key)
+    except Exception as exc:
+        _fail_idempotency(db, idempotency_key, claim_owner, exc)
         raise
 
 
@@ -994,15 +1181,36 @@ def approve_request(
         raise HTTPException(status_code=404, detail="Solicitud no encontrada")
     if approval.status != "pending":
         raise HTTPException(status_code=409, detail=f"La solicitud ya está en estado {approval.status}")
-    approval.status = "approved"
-    approval.reviewed_at = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
-    approval.reviewed_by = principal.username
+    reviewed_at = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    decision = db.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == approval_id,
+            ApprovalRequest.installation_id == principal.installation_id,
+            ApprovalRequest.status == "pending",
+        )
+        .values(status="approved", reviewed_at=reviewed_at, reviewed_by=principal.username)
+    )
+    if decision.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="La solicitud ya fue decidida por otro operador")
     if approval.action_type == "issue_invoice":
         invoice = db.query(InvoiceDraft).filter(InvoiceDraft.id == approval.target_key).first()
         if invoice:
             invoice.status = "approved"
+    db.add(
+        AuditLog(
+            installation_id=principal.installation_id,
+            agent_id="system",
+            user_id=principal.user_id,
+            event_type="approval",
+            provider="internal",
+            model_name="deterministic",
+            status="success",
+            details={"approval_id": approval_id, "decision": "approved"},
+        )
+    )
     db.commit()
-    _audit(db, event_type="approval", status_value="success", details={"approval_id": approval.id, "decision": "approved"}, principal=principal)
     return {"status": "approved", "approval_id": approval_id, "reviewed_by": principal.username}
 
 
@@ -1018,12 +1226,38 @@ def reject_request(
         raise HTTPException(status_code=404, detail="Solicitud no encontrada")
     if approval.status != "pending":
         raise HTTPException(status_code=409, detail=f"La solicitud ya está en estado {approval.status}")
-    approval.status = "rejected"
-    approval.reviewed_at = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
-    approval.reviewed_by = principal.username
-    approval.rejection_reason = decision.rejection_reason or "Rechazada por un administrador"
+    rejection_reason = decision.rejection_reason or "Rechazada por un administrador"
+    reviewed_at = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    decision_result = db.execute(
+        update(ApprovalRequest)
+        .where(
+            ApprovalRequest.id == approval_id,
+            ApprovalRequest.installation_id == principal.installation_id,
+            ApprovalRequest.status == "pending",
+        )
+        .values(
+            status="rejected",
+            reviewed_at=reviewed_at,
+            reviewed_by=principal.username,
+            rejection_reason=rejection_reason,
+        )
+    )
+    if decision_result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="La solicitud ya fue decidida por otro operador")
+    db.add(
+        AuditLog(
+            installation_id=principal.installation_id,
+            agent_id="system",
+            user_id=principal.user_id,
+            event_type="approval",
+            provider="internal",
+            model_name="deterministic",
+            status="success",
+            details={"approval_id": approval_id, "decision": "rejected"},
+        )
+    )
     db.commit()
-    _audit(db, event_type="approval", status_value="success", details={"approval_id": approval.id, "decision": "rejected"}, principal=principal)
     return {"status": "rejected", "approval_id": approval_id, "reviewed_by": principal.username}
 
 
@@ -1065,21 +1299,61 @@ def get_provider_dashboard(_: Principal = Depends(require_roles("provider_admin"
 def import_data(
     entity_type: str,
     req: DataImportRequest,
+    idempotency_key_header: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     principal: Principal = Depends(require_roles(*ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
+    claim_key: str | None = None
+    claim_owner: str | None = None
+    if not req.dry_run:
+        raw_key = str(idempotency_key_header or "").strip()
+        if not raw_key or len(raw_key) > 200:
+            raise HTTPException(status_code=428, detail="Idempotency-Key es obligatoria para importar datos")
+        claim_key = f"import:{entity_type}:{raw_key}"
+        payload = {"entity_type": entity_type, **req.model_dump(mode="json")}
+        claimed, record = _claim_idempotency(db, claim_key, payload)
+        if not claimed:
+            if record and record.state == "completed" and isinstance(record.response_body, dict):
+                return record.response_body
+            return JSONResponse(
+                status_code=202,
+                content={"status": "processing", "attempt_count": record.attempt_count if record else None},
+            )
+        if record is None or not record.owner_id:
+            raise HTTPException(status_code=503, detail="No se pudo adquirir el lease de importación")
+        claim_owner = record.owner_id
     try:
-        result = ImportService(db).process(entity_type, req.items, req.dry_run)
-    except ImportValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if result["status"] == "success":
-        _audit(
-            db,
-            event_type="data_import",
-            status_value="success",
-            details={"entity_type": entity_type, **result},
-            principal=principal,
+        result = ImportService(db).process(
+            entity_type,
+            req.items,
+            req.dry_run,
+            commit=req.dry_run,
         )
+    except ImportValidationError as exc:
+        if claim_key and claim_owner:
+            _fail_idempotency(db, claim_key, claim_owner, exc, 422)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        if claim_key and claim_owner:
+            _fail_idempotency(db, claim_key, claim_owner, exc)
+        raise
+    try:
+        if result["status"] == "success":
+            _audit(
+                db,
+                event_type="data_import",
+                status_value="success",
+                details={"entity_type": entity_type, **result},
+                principal=principal,
+                commit=not bool(claim_key),
+            )
+        if claim_key and claim_owner:
+            _complete_idempotency(db, claim_key, claim_owner, result, commit=False)
+            db.commit()
+    except Exception as exc:
+        if claim_key and claim_owner:
+            _fail_idempotency(db, claim_key, claim_owner, exc)
+        raise
     return result
 
 
@@ -1088,25 +1362,65 @@ async def import_data_file(
     entity_type: str,
     file: UploadFile = File(...),
     dry_run: bool = Query(default=True),
+    idempotency_key_header: Optional[str] = Header(default=None, alias="Idempotency-Key"),
     principal: Principal = Depends(require_roles(*ADMIN_ROLES)),
     db: Session = Depends(get_db),
 ):
+    claim_key: str | None = None
+    claim_owner: str | None = None
     try:
         content = await file.read(20 * 1024 * 1024 + 1)
         items = parse_import_file(file.filename or "importacion", content)
-        result = ImportService(db).process(entity_type, items, dry_run)
+        if not dry_run:
+            raw_key = str(idempotency_key_header or "").strip()
+            if not raw_key or len(raw_key) > 200:
+                raise HTTPException(status_code=428, detail="Idempotency-Key es obligatoria para importar datos")
+            claim_key = f"import-file:{entity_type}:{raw_key}"
+            payload = {
+                "entity_type": entity_type,
+                "filename": Path(file.filename or "importacion").name,
+                "dry_run": False,
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+            claimed, record = _claim_idempotency(db, claim_key, payload)
+            if not claimed:
+                if record and record.state == "completed" and isinstance(record.response_body, dict):
+                    return record.response_body
+                return JSONResponse(
+                    status_code=202,
+                    content={"status": "processing", "attempt_count": record.attempt_count if record else None},
+                )
+            if record is None or not record.owner_id:
+                raise HTTPException(status_code=503, detail="No se pudo adquirir el lease de importación")
+            claim_owner = record.owner_id
+        result = ImportService(db).process(entity_type, items, dry_run, commit=dry_run)
     except (ImportValidationError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        if claim_key and claim_owner:
+            _fail_idempotency(db, claim_key, claim_owner, exc, 422)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        if claim_key and claim_owner:
+            _fail_idempotency(db, claim_key, claim_owner, exc)
+        raise
     finally:
         await file.close()
-    if result["status"] == "success":
-        _audit(
-            db,
-            event_type="data_import_file",
-            status_value="success",
-            details={"entity_type": entity_type, "filename": Path(file.filename or "").name, **result},
-            principal=principal,
-        )
+    try:
+        if result["status"] == "success":
+            _audit(
+                db,
+                event_type="data_import_file",
+                status_value="success",
+                details={"entity_type": entity_type, "filename": Path(file.filename or "").name, **result},
+                principal=principal,
+                commit=not bool(claim_key),
+            )
+        if claim_key and claim_owner:
+            _complete_idempotency(db, claim_key, claim_owner, result, commit=False)
+            db.commit()
+    except Exception as exc:
+        if claim_key and claim_owner:
+            _fail_idempotency(db, claim_key, claim_owner, exc)
+        raise
     return result
 
 
@@ -1131,7 +1445,10 @@ async def trigger_workflow(
         external = await activepieces_adapter.trigger_webhook(req.webhook_path, {"workflow_name": req.workflow_name, "event_type": req.event_type, **req.payload})
     except ActivepiecesIntegrationError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    execution_id = str(external.get("executionId") or external.get("id") or f"exec-{uuid.uuid4().hex[:12]}")
+    external_execution_id = external.get("executionId") or external.get("id")
+    if not external_execution_id:
+        raise HTTPException(status_code=502, detail="Activepieces no devolvió un ID de ejecución")
+    execution_id = str(external_execution_id)
     db.add(
         AuditLog(
             id=execution_id if len(execution_id) < 128 else str(uuid.uuid4()),
@@ -1263,27 +1580,63 @@ async def sync_prestashop_products(
 @app.post("/integrations/ghl/leads", tags=["GHL"])
 async def create_ghl_lead(req: LeadRequest, principal: Principal = Depends(require_roles(*OPERATOR_ROLES)), db: Session = Depends(get_db)):
     idempotency_key = f"ghl-lead:{req.external_id}"
-    existing = db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == idempotency_key).first()
-    if existing:
-        return {"status": "duplicate_ignored", "result": existing.response_body}
+    request_payload = req.model_dump(mode="json")
+    claimed, record = _claim_idempotency(db, idempotency_key, request_payload)
+    if not claimed:
+        if record and record.state == "completed":
+            return {"status": "duplicate_ignored", "result": record.response_body}
+        raise HTTPException(status_code=409, detail="La creación del lead ya está en proceso")
+    if record is None or not record.owner_id:
+        raise HTTPException(status_code=503, detail="No se pudo adquirir el lease del lead")
+    claim_owner = record.owner_id
+    checkpoint = dict(record.response_body or {})
     try:
-        contact_response = await ghl_adapter.upsert_contact(email=str(req.email), first_name=req.first_name, phone=req.phone, company_name=req.company_name)
-        contact = contact_response.get("contact") or contact_response
-        contact_id = str(contact.get("id") or "")
+        contact_id = str(checkpoint.get("contact_id") or "")
+        if not contact_id:
+            contact_response = await ghl_adapter.upsert_contact(
+                email=str(req.email),
+                first_name=req.first_name,
+                phone=req.phone,
+                company_name=req.company_name,
+            )
+            contact = contact_response.get("contact") or contact_response
+            contact_id = str(contact.get("id") or "")
         if not contact_id:
             raise GHLIntegrationError("GHL no devolvió un ID de contacto")
-        opportunity = await ghl_adapter.create_opportunity(
-            contact_id=contact_id,
-            name=req.opportunity_name,
-            monetary_value=req.monetary_value,
-            external_id=req.external_id,
-        )
-        if req.note:
+        if not checkpoint.get("contact_id"):
+            checkpoint = {"status": "processing", "contact_id": contact_id}
+            _checkpoint_idempotency(db, idempotency_key, claim_owner, checkpoint)
+
+        opportunity = checkpoint.get("opportunity")
+        if not opportunity:
+            opportunity = await ghl_adapter.create_opportunity(
+                contact_id=contact_id,
+                name=req.opportunity_name,
+                monetary_value=req.monetary_value,
+                external_id=req.external_id,
+            )
+            checkpoint["opportunity"] = opportunity
+            _checkpoint_idempotency(db, idempotency_key, claim_owner, checkpoint)
+        if req.note and not checkpoint.get("note_completed"):
             await ghl_adapter.add_note(contact_id, req.note)
+            checkpoint["note_completed"] = True
+            _checkpoint_idempotency(db, idempotency_key, claim_owner, checkpoint)
     except GHLIntegrationError as exc:
+        _fail_idempotency(db, idempotency_key, claim_owner, exc, 502)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     result = {"status": "success", "contact_id": contact_id, "opportunity": opportunity}
-    db.add(IdempotencyRecord(idempotency_key=idempotency_key, response_body=result))
-    db.commit()
-    _audit(db, event_type="ghl_lead", status_value="success", details={"external_id": req.external_id, "contact_id": contact_id}, principal=principal)
+    try:
+        _complete_idempotency(db, idempotency_key, claim_owner, result, commit=False)
+        _audit(
+            db,
+            event_type="ghl_lead",
+            status_value="success",
+            details={"external_id": req.external_id, "contact_id": contact_id},
+            principal=principal,
+            commit=False,
+        )
+        db.commit()
+    except Exception as exc:
+        _fail_idempotency(db, idempotency_key, claim_owner, exc)
+        raise
     return result

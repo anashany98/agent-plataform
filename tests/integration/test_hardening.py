@@ -112,7 +112,7 @@ def test_prestashop_contract_normalizes_localized_products(monkeypatch):
     adapter.currency_id = "0"
     async def fake_get(resource, params):
         if resource == 'stock_availables': return {'stock_availables': [{'quantity': '7'}]}
-        return {'products': [{'id': 42, 'reference': 'OF-42', 'name': {'language': [{'value': 'Silla Ergo'}]}, 'description_short': 'Ergonómica', 'price': '199.95', 'id_category_default': 3, 'active': 1}]}
+        return {'products': [{'id': 42, 'reference': 'OF-42', 'name': {'language': [{'value': 'Silla Ergo'}]}, 'description_short': 'Ergonómica', 'price': '199.95', 'id_category_default': 3, 'active': 1, 'show_price': 1, 'available_for_order': 1}]}
     monkeypatch.setattr(adapter, '_get', fake_get)
     products = asyncio.run(adapter.search_products('silla'))
     assert products[0]['external_id'] == '42'
@@ -139,6 +139,7 @@ def test_activepieces_contract_normalizes_webhook_path(monkeypatch):
     adapter = ActivepiecesAdapter(); captured = {}
     class Response:
         content = b'{"executionId":"exec-1"}'
+        status_code = 200
         def raise_for_status(self): return None
         def json(self): return {'executionId': 'exec-1'}
     class Client:
@@ -232,7 +233,10 @@ def test_prestashop_enrichment_includes_features_combinations_and_specific_price
 
 
 def test_product_search_matches_verified_features_not_only_exact_name(client, auth_headers):
-    response = client.post('/api/bridge/import/products', headers=auth_headers, json={
+    response = client.post('/api/bridge/import/products', headers={
+        **auth_headers,
+        'Idempotency-Key': f'feature-search-{uuid.uuid4().hex}',
+    }, json={
         'dry_run': False,
         'items': [{
             'sku': f'ERG-{uuid.uuid4().hex[:8]}',

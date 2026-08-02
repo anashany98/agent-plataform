@@ -63,7 +63,7 @@ def _create_pending_quote(client, auth_headers, *, label: str):
     product_name = f"Silla sintética {label} {unique}"
     imported = client.post(
         "/api/bridge/import/products",
-        headers=auth_headers,
+        headers={**auth_headers, "Idempotency-Key": f"fixture-product-{unique}"},
         json={
             "dry_run": False,
             "items": [
@@ -110,7 +110,7 @@ def test_p0_001_demo_source_aliases_are_fail_closed_across_catalog_operations(cl
     aliases = ("Demo", " demo ", "fixture", "SAMPLE", "customer-demo-data")
     response = client.post(
         "/api/bridge/import/products",
-        headers=auth_headers,
+        headers={**auth_headers, "Idempotency-Key": f"demo-aliases-{unique}"},
         json={
             "dry_run": False,
             "items": [

@@ -162,7 +162,10 @@ def test_atomic_stock_reservation_rejects_overbooking():
 
 def test_generic_recommendation_uses_only_verified_catalog_data(client, auth_headers):
     sku = f'LUM-{uuid.uuid4().hex[:8]}'
-    imported = client.post('/api/bridge/import/products', headers=auth_headers, json={
+    imported = client.post('/api/bridge/import/products', headers={
+        **auth_headers,
+        'Idempotency-Key': f'commerce-product-{sku}',
+    }, json={
         'dry_run': False,
         'items': [{
             'sku': sku,

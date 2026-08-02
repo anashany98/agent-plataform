@@ -21,6 +21,10 @@ class PrestaShopAdapter:
     tienda.
     """
 
+    _PAGE_SIZE = 500
+    _MAX_PAGES = 200
+    _COMMERCE_FLAGS = ("active", "show_price", "available_for_order")
+
     def __init__(self) -> None:
         self.base_url = settings.PRESTASHOP_BASE_URL.rstrip("/")
         self.api_key = settings.PRESTASHOP_API_KEY
@@ -66,6 +70,104 @@ class PrestaShopAdapter:
         if isinstance(rows, dict):
             rows = [rows]
         return [row for row in rows if isinstance(row, dict)]
+
+    @staticmethod
+    def _enabled_flag(value: Any) -> bool:
+        return str(value).strip().lower() in {"1", "true"}
+
+    @classmethod
+    def _is_sellable_product(cls, product: Dict[str, Any]) -> bool:
+        return all(cls._enabled_flag(product.get(field)) for field in cls._COMMERCE_FLAGS)
+
+    @classmethod
+    def _require_sellable_product(cls, product: Dict[str, Any], product_id: str) -> None:
+        if not cls._is_sellable_product(product):
+            raise PrestaShopIntegrationError(
+                f"El producto {product_id} no está activo, visible y disponible para pedidos"
+            )
+
+    async def _get_paginated_rows(
+        self,
+        resource: str,
+        params: Dict[str, Any],
+        *,
+        page_size: int = _PAGE_SIZE,
+    ) -> List[Dict[str, Any]]:
+        """Read a stable remote collection without accepting silent truncation."""
+
+        base_params = dict(params)
+        base_params.pop("limit", None)
+        rows: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for page_number in range(self._MAX_PAGES):
+            offset = page_number * page_size
+            payload = await self._get(
+                resource,
+                {**base_params, "limit": f"{offset},{page_size}"},
+            )
+            page = self._rows(payload, resource)
+            if len(page) > page_size:
+                raise PrestaShopIntegrationError(
+                    f"Respuesta inválida durante la paginación de {resource}"
+                )
+
+            page_ids: set[str] = set()
+            for row in page:
+                row_id = str(row.get("id") or "").strip()
+                if not row_id or row_id in page_ids or row_id in seen_ids:
+                    raise PrestaShopIntegrationError(
+                        f"Respuesta inestable durante la paginación de {resource}"
+                    )
+                page_ids.add(row_id)
+
+            rows.extend(page)
+            seen_ids.update(page_ids)
+            if len(page) < page_size:
+                return rows
+
+        raise PrestaShopIntegrationError(
+            f"Se superó el límite seguro de paginación de {resource}"
+        )
+
+    async def _get_rows_by_ids(
+        self,
+        resource: str,
+        ids: Iterable[Any],
+        params: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        normalized_ids = [str(value).strip() for value in ids]
+        if not normalized_ids or any(not value for value in normalized_ids):
+            raise PrestaShopIntegrationError(
+                f"Asociaciones inválidas al recuperar {resource}"
+            )
+        unique_ids = list(dict.fromkeys(normalized_ids))
+        result: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for offset in range(0, len(unique_ids), self._PAGE_SIZE):
+            chunk = unique_ids[offset : offset + self._PAGE_SIZE]
+            payload = await self._get(
+                resource,
+                {
+                    **params,
+                    "filter[id]": self._filter_ids(chunk),
+                    "limit": f"0,{self._PAGE_SIZE}",
+                },
+            )
+            page = self._rows(payload, resource)
+            page_ids = [str(row.get("id") or "").strip() for row in page]
+            expected_ids = set(chunk)
+            if (
+                any(not row_id for row_id in page_ids)
+                or len(page_ids) != len(set(page_ids))
+                or set(page_ids) != expected_ids
+                or seen_ids.intersection(page_ids)
+            ):
+                raise PrestaShopIntegrationError(
+                    f"Respuesta incompleta durante la paginación de {resource}"
+                )
+            result.extend(page)
+            seen_ids.update(page_ids)
+        return result
 
     @staticmethod
     def _filter_ids(values: Iterable[Any]) -> str:
@@ -119,7 +221,7 @@ class PrestaShopAdapter:
             )
             for item in self._rows(payload, "products"):
                 product_id = str(item.get("id") or "").strip()
-                if product_id:
+                if product_id and self._is_sellable_product(item):
                     found.setdefault(product_id, item)
             if len(found) >= safe_limit:
                 break
@@ -153,7 +255,7 @@ class PrestaShopAdapter:
         return [
             await self._normalize_product(item, include_details=include_details)
             for item in self._rows(payload, "products")
-            if str(item.get("id") or "").strip()
+            if str(item.get("id") or "").strip() and self._is_sellable_product(item)
         ]
 
     async def _normalize_product(
@@ -165,6 +267,7 @@ class PrestaShopAdapter:
         product_id = str(item.get("id") or "").strip()
         if not product_id:
             raise PrestaShopIntegrationError("Producto sin identificador")
+        self._require_sellable_product(item, product_id)
 
         details: Dict[str, Any] = {}
         if include_details:
@@ -207,9 +310,9 @@ class PrestaShopAdapter:
             "stock_quantity": stock,
             "category": category_name or category_id or "PrestaShop",
             "attributes": {
-                "active": str(item.get("active", "1")).lower() in {"1", "true"},
-                "available_for_order": str(item.get("available_for_order", "1")).lower() in {"1", "true"},
-                "show_price": str(item.get("show_price", "1")).lower() in {"1", "true"},
+                "active": self._enabled_flag(item.get("active")),
+                "available_for_order": self._enabled_flag(item.get("available_for_order")),
+                "show_price": self._enabled_flag(item.get("show_price")),
                 "manufacturer": self._localized(item.get("manufacturer_name")),
                 "id_category_default": item.get("id_category_default"),
                 "tax_rules_group_id": tax_rules_group_id,
@@ -232,6 +335,7 @@ class PrestaShopAdapter:
         if not products:
             raise PrestaShopIntegrationError("Producto no encontrado en PrestaShop")
         product = products[0]
+        self._require_sellable_product(product, product_id)
         product["stock_quantity"] = await self.get_stock(product_id)
         product["features"] = await self.get_features(product)
         product["combinations"] = await self.get_combinations(product_id, product)
@@ -244,6 +348,7 @@ class PrestaShopAdapter:
         if not products:
             raise PrestaShopIntegrationError("Producto no encontrado en PrestaShop")
         product = products[0]
+        self._require_sellable_product(product, product_id)
         return {
             "id_tax_rules_group": str(product.get("id_tax_rules_group") or "0"),
             "id_default_combination": str(product.get("id_default_combination") or "0"),
@@ -318,24 +423,36 @@ class PrestaShopAdapter:
         association_rows: List[Dict[str, Any]] = []
         if product:
             associations = product.get("associations") or {}
+            if not isinstance(associations, dict):
+                raise PrestaShopIntegrationError(
+                    f"Asociaciones de combinaciones inválidas para el producto {product_id}"
+                )
             association_rows = associations.get("combinations") or []
             if isinstance(association_rows, dict):
                 association_rows = [association_rows]
+            if not isinstance(association_rows, list):
+                raise PrestaShopIntegrationError(
+                    f"Asociaciones de combinaciones inválidas para el producto {product_id}"
+                )
 
         params: Dict[str, Any] = {
             "filter[id_product]": f"[{product_id}]",
             "display": "full",
-            "limit": "0,500",
             "sort": "[id_ASC]",
         }
         if association_rows:
-            ids = [row.get("id") for row in association_rows if isinstance(row, dict)]
-            if ids:
-                params.pop("filter[id_product]", None)
-                params["filter[id]"] = self._filter_ids(ids)
-
-        payload = await self._get("combinations", params)
-        rows = self._rows(payload, "combinations")
+            if not all(isinstance(row, dict) for row in association_rows):
+                raise PrestaShopIntegrationError(
+                    f"Asociaciones de combinaciones inválidas para el producto {product_id}"
+                )
+            params.pop("filter[id_product]", None)
+            rows = await self._get_rows_by_ids(
+                "combinations",
+                (row.get("id") for row in association_rows),
+                params,
+            )
+        else:
+            rows = await self._get_paginated_rows("combinations", params)
         if not rows:
             return []
 
@@ -422,16 +539,16 @@ class PrestaShopAdapter:
         return result
 
     async def get_specific_prices(self, product_id: str) -> List[Dict[str, Any]]:
-        payload = await self._get(
+        rows = await self._get_paginated_rows(
             "specific_prices",
             {
                 "filter[id_product]": f"[{product_id}]",
                 "display": "[id,id_shop_group,id_shop,id_cart,id_currency,id_country,id_group,id_customer,id_product_attribute,id_specific_price_rule,price,from_quantity,reduction,reduction_tax,reduction_type,from,to]",
-                "limit": "0,500",
+                "sort": "[id_ASC]",
             },
         )
         result: List[Dict[str, Any]] = []
-        for row in self._rows(payload, "specific_prices"):
+        for row in rows:
             result.append(
                 {
                     "id": str(row.get("id") or ""),

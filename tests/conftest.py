@@ -18,6 +18,7 @@ os.environ.update(
         'AUTO_SEED_DEMO_DATA': 'false',
         'CHATWOOT_WEBHOOK_SECRET': 'test-chatwoot-secret',
         'CHATWOOT_API_TOKEN': '',
+        'CHATWOOT_HANDOFF_TEAM_ID': '1',
         'ALLOW_INTEGRATION_STUBS': 'true',
         'ALLOW_MOCK_LLM': 'true',
         'STANDARD_LLM_PROVIDER': 'mock',

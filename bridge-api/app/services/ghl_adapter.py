@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from app.config import settings
+from app.services.http_retry import request_with_retry
 
 
 class GHLIntegrationError(RuntimeError):
@@ -31,7 +32,14 @@ class GHLAdapter:
     async def _request(self, method: str, path: str, **kwargs: Any) -> Dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
-                response = await client.request(method, f"{self.base_url}{path}", headers=self._headers(), **kwargs)
+                response = await request_with_retry(
+                    lambda: client.request(
+                        method,
+                        f"{self.base_url}{path}",
+                        headers=self._headers(),
+                        **kwargs,
+                    )
+                )
                 response.raise_for_status()
                 return response.json() if response.content else {}
         except (httpx.HTTPError, ValueError) as exc:

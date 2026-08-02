@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 import httpx
 
 from app.config import settings
+from app.services.http_retry import request_with_retry
 
 
 class ChatwootIntegrationError(RuntimeError):
@@ -24,7 +25,13 @@ class ChatwootAdapter:
             return {"status": "simulated", "path": path, "payload": payload}
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.post(f"{self.base_url}{path}", json=payload, headers=self._headers())
+                response = await request_with_retry(
+                    lambda: client.post(
+                        f"{self.base_url}{path}",
+                        json=payload,
+                        headers=self._headers(),
+                    )
+                )
                 response.raise_for_status()
                 if not response.content:
                     return {"status": "success", "http_status": response.status_code}
@@ -42,6 +49,21 @@ class ChatwootAdapter:
         return await self._post(
             f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/toggle_status",
             {"status": status},
+        )
+
+    async def assign_human_handoff(self, account_id: int, conversation_id: int) -> Dict[str, Any]:
+        payload: Dict[str, int] = {}
+        if settings.CHATWOOT_HANDOFF_TEAM_ID > 0:
+            payload["team_id"] = settings.CHATWOOT_HANDOFF_TEAM_ID
+        if settings.CHATWOOT_HANDOFF_ASSIGNEE_ID > 0:
+            payload["assignee_id"] = settings.CHATWOOT_HANDOFF_ASSIGNEE_ID
+        if not payload:
+            raise ChatwootIntegrationError(
+                "El handoff requiere CHATWOOT_HANDOFF_TEAM_ID o CHATWOOT_HANDOFF_ASSIGNEE_ID"
+            )
+        return await self._post(
+            f"/api/v1/accounts/{account_id}/conversations/{conversation_id}/assignments",
+            payload,
         )
 
     async def add_private_note(self, account_id: int, conversation_id: int, note_content: str) -> Dict[str, Any]:
