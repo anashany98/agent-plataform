@@ -1,38 +1,45 @@
-# Tareas
+# Tareas autoritativas de remediación
 
-## Cerradas
+**Rama:** `production-remediation`
+**Recovery commit:** `ed77056`
+**Estados permitidos:** TODO · IN PROGRESS · BLOCKED · FIXED · VERIFIED · DEFERRED · NOT APPLICABLE
 
-- [x] Eliminar falsos positivos de autenticación e integraciones.
-- [x] Implementar usuarios, sesiones, contraseña temporal y RBAC.
-- [x] Exigir HMAC oficial de Chatwoot y protección antirreplay.
-- [x] Corregir confirmación cruzada entre conversaciones.
-- [x] Evitar pedidos, reservas, facturas y aprobaciones duplicadas.
-- [x] Hacer atómica la reserva de stock y el proceso de confirmación.
-- [x] Aplicar tarifas, impuestos y exenciones determinísticamente.
-- [x] Sustituir respuestas LLM falsas por adaptadores reales que fallan cerrados.
-- [x] Sustituir el RAG simulado por persistencia, extracción, embeddings y citas reales.
-- [x] Sustituir el portal CDN/demo por código React/TypeScript reproducible.
-- [x] Implementar adaptadores reales para Chatwoot y Activepieces.
-- [x] Añadir PrestaShop: productos, características, combinaciones, precios específicos y stock.
-- [x] Añadir GHL: contacto, oportunidad y nota con idempotencia.
-- [x] Endurecer Docker Compose, proxy, redes, secretos y health checks.
-- [x] Corregir backups, restore, actualización, rollback y aprovisionamiento.
-- [x] Crear pruebas de regresión para los defectos críticos.
-
-## Pendientes antes del piloto
-
-- [ ] Ejecutar build limpio de los 14 servicios con Docker.
-- [ ] Validar portal en navegador, responsive, modo claro y oscuro.
-- [ ] Crear inbox/widget real de Chatwoot y ejecutar conversación completa.
-- [ ] Ejecutar un flujo real desde Activepieces y comprobar historial/reintento.
-- [ ] Conectar PrestaShop de Ofideep con clave de solo lectura.
-- [ ] Ejecutar dry-run y conciliación de 100–300 productos reales.
-- [ ] Verificar variantes, características, precios e inventario de una muestra manual.
-- [ ] Conectar subcuenta GHL y crear contacto/oportunidad real de prueba.
-- [ ] Configurar modelo real y probar indisponibilidad/fallback.
-- [ ] Configurar embeddings reales y ejecutar benchmark documental.
-- [ ] Ejecutar backup integral y restore en una instalación vacía.
-- [ ] Probar update y rollback con una release versionada.
-- [ ] Ejecutar pruebas de carga, seguridad de contenedores y aislamiento entre dos clientes.
-- [ ] Rotar/revocar las credenciales Supabase que estaban presentes en el ZIP original.
-- [ ] Realizar UAT y aprobación explícita del responsable de Ofideep.
+| ID | Fase | Prioridad | Componente | Problema | Causa raíz | Solución prevista | Criterio de aceptación | Tests necesarios | Estado | Evidencia | Commit | Dependencias |
+|---|---:|---|---|---|---|---|---|---|---|---|---|---|
+| T-000 | 0 | P1 | Control | Misión sin registro ejecutable | Prompt solo adjunto | Guardar instrucciones raíz | `agents.md` coincide con origen | Hash SHA-256 | VERIFIED | Copia exacta validada | `ed77056` | — |
+| T-001 | 0 | P1 | Git | Workspace sin `.git` | Entrega exportada | Inicializar rama y recovery point | Rama limpia y commit resoluble | `git status/log/rev-parse` | VERIFIED | `production-remediation` / `ed77056` | `ed77056` | — |
+| T-002 | 0 | P1 | Baseline | Estado previo contradictorio | Informes no contrastados | Baseline reproducible actual | Cuatro documentos baseline completos | Comandos de entorno/Compose | VERIFIED | `docs/baseline/`; Compose válido sin arrancar servicios | Pendiente de commit de Fase 0 | T-001 |
+| T-003 | 0 | P1 | Gobierno | Sin control autoritativo coherente | Documentación histórica | Crear registros y readiness único | Todos los documentos de control enlazados | Revisión de enlaces/estados | VERIFIED | 30 criterios, 24 gates, enlaces y estados validados | Pendiente de commit de Fase 0 | T-002 |
+| P0-001 | 2 | P0 | Catálogo | Demo puede aparecer como producto real | Seed activo y búsqueda sin procedencia fail-closed | Prohibir demo en producción y filtrar origen | Ninguna ruta cliente devuelve demo | Unitario, integración y startup prod | TODO | Auditoría D-001 | — | F01 |
+| P0-002 | 2 | P0 | Confirmación | Negaciones pueden confirmar operaciones | Coincidencia por substring sin state machine | Acción pendiente con token/hash/caducidad | Negaciones jamás transicionan a confirmado | Matriz adversarial y concurrencia | TODO | Auditoría D-002 | — | F01 |
+| P0-003 | 2 | P0 | Pricing | Variantes, precios específicos e IVA ignorados | Modelo local incompleto | Servicio Decimal con snapshot de autoridad | Golden tests por variante/grupo/impuesto | Unitario, contrato PrestaShop | TODO | Auditoría D-003 | — | F01, sandbox |
+| P0-004 | 2 | P0 | Stock | Reserva local diverge de autoridad | Sin TTL/release/reconciliación | Ciclo de reserva idempotente y autoridad configurable | Cero oversell bajo concurrencia | Concurrencia, expiración, cancelación | TODO | Auditoría D-004 | — | F01, catálogo |
+| P0-005 | 2 | P0 | Migraciones | Downgrade destructivo | `drop_all` genérico | Migraciones explícitas no destructivas | Fixture sobrevive upgrade/rollback | Clean install, upgrade, rollback | TODO | Auditoría D-005 | — | F01, backup gate |
+| P1-001 | 2 | P1 | Red | Bridge/vendor sin egress útil | Redes internas sin ruta por defecto | Egress separado y allowlist | Solo destinos autorizados son accesibles | DNS/SSRF/connectivity | TODO | Auditoría D-006 | — | F01 |
+| P1-002 | 2 | P1 | Chatwoot | Web reinicia por PID obsoleto | Entrypoint no valida PID | Arranque y shutdown robustos | Diez recreates/reboots sanos | Runtime/restart | TODO | Auditoría D-007 | — | P1-001 |
+| P1-003 | 2 | P1 | Proxy | Nginx master sin workers | Capabilities incompatibles | Nginx unprivileged y health real | HTTP, worker y health coherentes | Compose/runtime | TODO | Auditoría D-008 | — | F01 |
+| P1-004 | 2 | P1 | GHL | Lead no es operación fiable | Sin credenciales, outbox ni retry | Provider local + adaptador/outbox | Upsert idempotente y fallo observable | Contrato y fault injection | TODO | Auditoría D-009 | — | F08 |
+| P1-005 | 2 | P1 | Activepieces | IDs de ejecución pueden ser ficticios | Fallback sintético | Eliminar evidencia inventada | Solo ID/estado real o error explícito | Contrato/runtime | TODO | Auditoría D-010 | — | F17 |
+| P1-006 | 2 | P1 | Aprobaciones | Race read-then-write | Sin CAS/lock | Transición versionada atómica | Una única decisión gana | Concurrencia | TODO | Auditoría D-011 | — | F18 |
+| P1-007 | 2 | P1 | Costes IA | Coste siempre cero | Usage/tarifario no conectado | Tracker real y hard limit | Presupuesto corta ejecución | Unitario/integración | TODO | Auditoría D-012 | — | F04, F05 |
+| P1-008 | 2 | P1 | DR | Backup nunca restaurado | Snapshot incompleto y sin ensayo | Backup consistente + restore aislado | Hashes, flujo y RTO medidos | Backup/restore | TODO | Auditoría D-013 | — | F24 |
+| P1-009 | 2 | P1 | Release | Update/rollback no trazable | Git ausente y checkout global | Releases inmutables por cliente | Upgrade y rollback reproducibles | Smoke/rollback | TODO | Git inicializado; workflow inmutable aún pendiente | `ed77056` | F25 |
+| P1-010 | 2 | P1 | Supply chain | Dependencias vulnerables y SBOM ausente | Lock/scan incompletos | Actualizar, fijar y escanear | Audits sin vulnerabilidad crítica/alta aceptada | pip/npm/image scan | TODO | Auditoría de dependencias | — | F21, F25 |
+| P1-011 | 2 | P1 | RAG | ACL/exfiltración insuficiente | Denylist y carga global | Tenant/ACL/DLP/ingesta segura | Corpus adversarial sin fuga | Seguridad RAG/E2E | TODO | Auditoría D-018 | — | F13 |
+| P1-012 | 2 | P1 | Observabilidad | Incidentes no detectables | Sin collector/alertas | Logs, métricas, trazas y alertas | Fault injection dispara alerta | Observabilidad | TODO | Auditoría D-021 | — | F22 |
+| F01 | 1 | P0 | QA | Defectos conocidos no reproducidos en rama | Evidencia previa separada | Tests rojos y registro actual | Cada defecto confirmado o descartado | Reproducción aislada | IN PROGRESS | Gate de Fase 0 superado; reproducciones pendientes | — | T-002, T-003 |
+| F03 | 3 | P1 | Arquitectura | Fuentes de verdad y acoplamiento | Crecimiento sin contratos | ADRs y provider boundaries | Arquitectura y ownership aprobados | Contract tests | TODO | Auditoría arquitectónica | — | P0/P1 |
+| F04-05 | 4–5 | P1 | Agentes/IA | Runner/tool policy/costes incompletos | Router heurístico desacoplado | Framework central y providers reales/locales | Tool allowlist, cancelación y costes probados | Unitario/integración/evals | TODO | Auditoría de agentes | — | P0/P1, F03 |
+| F06-11 | 6–11 | P1 | Negocio | Chat/CRM/catálogo/documentos incompletos | Implementación MVP parcial | Proveedores locales y módulos deterministas | Core útil sin externos | E2E local y contratos | TODO | Auditoría de capacidades | — | F04-05 |
+| F12-18 | 12–18 | P1 | Contenido/automatización | Wiki, SEO, landing y engine no implementados | Alcance futuro | Implementar con draft/approval por defecto | Ninguna publicación sensible automática | Unitario/E2E/aprobación | TODO | Matriz de gaps | — | Core estable |
+| F19-20 | 19–20 | P1 | Portal/RBAC | Portal parcial y matriz de permisos incompleta | API/UI concentradas | Portal profesional y RBAC backend | Roles/rutas/viewports verificados | Component/E2E/a11y/security | TODO | Auditoría UX/RBAC | — | APIs estables |
+| F21 | 21 | P0 | Seguridad | Baseline fallido | Controles críticos incompletos | Threat model y fixes priorizados | Cero P0 y security gate aprobado | SAST/DAST/deps/adversarial | TODO | `docs/audit/12_*` | — | P0/P1 |
+| F22 | 22 | P1 | Operación | Sin observabilidad integral | Instrumentación ausente | OTel/logs/metrics/alerts | Incidentes obligatorios detectables | Fault injection | TODO | `docs/audit/14_*` | — | Core estable |
+| F23 | 23 | P1 | Docker | Runtime roto y sin budgets | Compose/caps/redes/limits | Perfiles core→production endurecidos | Arranque limpio dentro de presupuesto | Build/up/soak/scan | TODO | Baseline Docker | — | P1-001..003 |
+| F24 | 24 | P0 | DR | Restore no probado | Proceso no ensayado | Restauración en instalación vacía | Integridad y tiempos medidos | Restore E2E | TODO | `docs/audit/15_*` | — | P0-005 |
+| F25 | 25 | P1 | CI/CD | Sin pipeline autoritativo | Entrega exportada | Gates reproducibles y artefactos inmutables | Pipeline completo y rollback | Pipeline/smoke | TODO | Git creado | — | F21, F23, F26 |
+| F26 | 26 | P1 | QA | Cobertura local 67 % con mocks | Pirámide insuficiente | Suite completa de riesgo | Rutas críticas sin falsos positivos | Unit/integration/contract/E2E | TODO | 31 tests históricos | — | Todas |
+| F27 | 27 | P2 | Rendimiento | Capacidad desconocida | Sin carga segura | Medición 1/5/10/25/50 clientes | Métricas separan medida/estimación | Load/soak | TODO | Carga bloqueada por RAM | — | F23, F26 |
+| F28 | 28 | P1 | Licencias | Titularidad/EE/SBOM inciertos | Vendor exportado sin metadata | Matriz, notices y aprobación legal | Artefacto redistribuible aprobado | SBOM/license scan | TODO | `docs/audit/17_*` | — | F25 |
+| F29 | 29 | P1 | Documentación | Informes contradictorios | Estados históricos mezclados | Documentación única y superseded explícito | Enlaces y estado sin contradicción | Doc/link lint | TODO | Auditoría documental | — | Todas |
+| F30 | Release | P0 | Release | No existe candidata reproducible | Gates abiertos | `release/production-candidate/` | Checksums, instalación y smoke reproducibles | Release validation | BLOCKED | P0/P1 y restore abiertos | — | F21–F29 |

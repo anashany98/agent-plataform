@@ -1,5 +1,7 @@
 # Platform Architecture & Component Blueprint
 
+> **ESTADO DE REMEDIACIÓN — NO USAR COMO DISEÑO DE PRODUCCIÓN APROBADO.** La arquitectura observada y sus fallos están en `docs/baseline/` y `docs/PROJECT_TECHNICAL_AUDIT.md`. La decisión vigente es mantener `MULTI-INSTANCE SINGLE-TENANT`, hacer el core funcional sin integraciones externas y formalizar providers/ownership en la Fase 3. Este documento se reescribirá tras cerrar P0/P1.
+
 ```
 +-------------------------------------------------------------------+
 |                        Client & End User                          |
