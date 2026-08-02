@@ -45,13 +45,32 @@ El gate G01 no arrancó servicios, no leyó valores de `.env`, no inspeccionó e
 
 El detalle, comandos y separación entre observado/no observado/bloqueado están en `docs/remediation/REPRODUCTION_EVIDENCE.md` y sus anexos.
 
-## Próxima evidencia obligatoria — Fase 2
+## Gate P0 de Fase 2 — corrección y verificación
 
-1. Negaciones y confirmación concurrente.
-2. Exclusión de demo y startup fail-closed en producción.
-3. Pricing `Decimal` por variante/impuesto y stock con TTL/release.
-4. Migración clean install/upgrade/rollback sin pérdida.
-5. Tenant isolation e ID enumeration.
-6. Webhooks duplicados, replay y outbox.
-7. Providers locales sin stubs y fallos externos explícitos.
-8. Restore en instalación vacía.
+Commit de implementación: `de236e9`.
+
+| Fecha | Control | Resultado | Alcance |
+|---|---|---|---|
+| 2026-08-02 | Matriz funcional P0 secuencial | 101 passed; 1 warning; 3,19 s | Unitarios, integración, demo, confirmación, comercio, aislamiento/modelos y 20 contratos PrestaShop |
+| 2026-08-02 | Migraciones SQLite herméticas | 23 passed; 1 warning; 10,28 s | Clean/adopción, preflight fail-closed, fixture, downgrade/reupgrade y FK integrity |
+| 2026-08-02 | PostgreSQL 15, run `6057fe090e42` | `verified` normal y `python -O`; 0 filas residuales | 12 FKs compuestas diferibles, confirmación concurrente, oversell y carreras release/release, release/cancel, release/expire |
+| 2026-08-02 | PostgreSQL 15, run `2a888ab9b141` | `head-cycle` verified; revisión final `0002`; 0 residuos | Downgrade hasta base y reupgrade preservan fixture y reserva activa con expiración |
+| 2026-08-02 | PostgreSQL 15, run `4f4b1445b8d6` | `historical-upgrade` verified; 12 FKs; 0 residuos | Adopción desde `0001`, tenant backfill, token legado hasheado y datos preservados |
+| 2026-08-02 | Guardas del verificador | 7 passed | Sin `assert` optimizable; DB/installation/run deben coincidir; contexto inseguro se rechaza |
+| 2026-08-02 | Compose config | código 0 | Renderizado estático tras flags demo y contexto PrestaShop; no acredita runtime |
+| 2026-08-02 | Ruff focalizado / compileall / diff | verde | `E9,F,I` en archivos P0; compilación de app/migraciones/scripts/tests; deuda global histórica no se oculta |
+| 2026-08-02 | Secret hygiene | `.env` ignorado/no trazado; 0 patrones de alta señal | Working tree P0; no sustituye scan de historial/artefacto final |
+
+Los PostgreSQL fueron contenedores únicos `pgvector/pgvector:pg15`, sin puertos ni volúmenes, con tmpfs y límites. Cada nombre se resolvió exactamente antes de eliminarlo; no se tocó `agent-platform-fixed-bridge-db-1` ni ningún proyecto ajeno. Los verificadores exigen una base `p0_verify_<run>`, una instalación `p0-verify-<run>` y un acknowledgement explícito, limpian en `finally` y solo imprimen `verified` después del cleanup.
+
+La evidencia P0 acredita los seis defectos P0 de rama. No acredita aún una release candidata, restore, build/full stack, UI, RAG, integraciones externas ni los P1 abiertos; por ello no cambia el estado comercial.
+
+## Próxima evidencia obligatoria — P1 de Fase 2
+
+1. Inbox/outbox, lease y replay de webhooks sin pérdida ni duplicado.
+2. GHL/Activepieces y aprobaciones con idempotencia, CAS, retry y estados reales.
+3. Paginación PrestaShop completa y aplicación de `show_price`/`available_for_order`.
+4. Coste/budget real y RAG ACL deny-by-default.
+5. Egress, proxy, Chatwoot, health, perfiles, límites y observabilidad runtime.
+6. Backup/restore en instalación vacía y release/rollback trazable.
+7. Dependencias, SBOM, licencias y pruebas E2E/UI.

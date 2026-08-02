@@ -13,6 +13,10 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 - Baseline, plan de remediación, readiness y evidencia persistente en `docs/`.
 - Registro de 32 defectos, registro de riesgos y evidencia reproducible de Fase 1.
 - Diecinueve tests rojos de regresión para aislamiento, demo, confirmación, comercio, migración, integraciones y seguridad.
+- Migración `0002` tenant-safe, contexto obligatorio de instalación y 12 relaciones compuestas diferibles.
+- Verificadores PostgreSQL efímeros para concurrencia P0, adopción histórica y downgrade/reupgrade seguro.
+- Contratos de regresión para demo, confirmación, PrestaShop, stock, aislamiento y falsos positivos del verificador.
+- Registro ampliado a 37 defectos tras la revisión adversarial: 7 verificados y 30 abiertos.
 
 ### Changed
 
@@ -20,8 +24,20 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 - Los resultados históricos se tratan como evidencia previa, no como verificación actual.
 - La Fase 0 queda cerrada con baseline de host/Git/Docker, inventario, dependencias, propiedad de datos y 30 criterios de readiness bloqueados.
 - La Fase 1 contrasta 30 defectos heredados y añade D-031/D-032 sin aplicar todavía correcciones de producción.
+- Los seis P0 reproducidos quedan verificados en `de236e9`; la Fase 2 continúa con 25 P1 y 5 P2 abiertos.
+- Pricing usa autoridad fiscal/variantes/scopes PrestaShop, precedencia compatible o fail-closed, `Decimal` y umbral de envío por presupuesto.
+- El catálogo acepta únicamente orígenes de producción confiables; demo y orígenes desconocidos fallan cerrados.
+
+### Fixed
+
+- Confirmación comercial exacta con token HMAC de 128 bits almacenado como SHA-256, caducidad, actor firmado y replay idempotente.
+- Reservas locales con TTL y transiciones atómicas de release/cancel/expire; stock externo no se confirma sin autoridad transaccional.
+- Downgrades destructivos sustituidos por migraciones explícitas, compatibles y no destructivas.
+- Aislamiento ORM de 14 modelos tenant-owned, incluida identidad de sesión al cambiar de instalación.
 
 ### Security
 
 - Se comprobó que `.env` permanece ignorado por Git.
 - El escaneo de patrones de secretos previo al recovery commit no detectó coincidencias de alta señal en código propio.
+- `.env` continúa ignorado/no trazado y el escaneo P0 no detectó patrones de secreto de alta señal.
+- El verificador rechaza bases no efímeras ligadas al run, no usa `assert` y elimina todos sus datos sintéticos incluso bajo `python -O`.
