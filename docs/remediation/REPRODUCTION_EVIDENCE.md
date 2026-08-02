@@ -165,3 +165,9 @@ Estos controles son parciales y no convierten la capacidad asociada en producci�
 ## Conclusión de Fase 1
 
 Se contrastaron los 30 defectos heredados, se añadieron D-031 (aislamiento explícito) y D-032 (harness no hermético), y se preservó evidencia negativa/positiva sin corregir producción. Hay seis P0, 21 P1 y cinco P2 abiertos. La Fase 2 debe comenzar por D-031, D-001–D-005 y después los P1 del núcleo; ninguna función nueva está autorizada antes de cerrarlos.
+
+## Addendum posterior — remediación P1
+
+Esta sección no altera el resultado histórico anterior. Después de reproducir los fallos, `de236e9` cerró los seis P0 y `48051e8` corrigió o endureció el bloque P1 de CAS, contratos de integración, retries, inbox/leases/checkpoints, importación, ACL, coste LLM, health y PrestaShop.
+
+La evidencia vigente y el alcance exacto de cada cierre están en [`../TEST_EVIDENCE.md`](../TEST_EVIDENCE.md) y [`DEFECT_REGISTER.md`](DEFECT_REGISTER.md). Permanecen parciales la reconciliación de efectos externos ambiguos, el handoff live, DLP/prompt injection, circuit breaker/outbox/DLQ, provisioning y el exactly-once frente a crash de proveedor. Por ello la decisión continúa siendo `NOT PRODUCTION READY — CRITICAL RISK`.

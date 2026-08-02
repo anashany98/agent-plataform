@@ -65,12 +65,29 @@ Los PostgreSQL fueron contenedores únicos `pgvector/pgvector:pg15`, sin puertos
 
 La evidencia P0 acredita los seis defectos P0 de rama. No acredita aún una release candidata, restore, build/full stack, UI, RAG, integraciones externas ni los P1 abiertos; por ello no cambia el estado comercial.
 
-## Próxima evidencia obligatoria — P1 de Fase 2
+## Bloque P1 de invariantes — corrección y verificación
 
-1. Inbox/outbox, lease y replay de webhooks sin pérdida ni duplicado.
-2. GHL/Activepieces y aprobaciones con idempotencia, CAS, retry y estados reales.
-3. Paginación PrestaShop completa y aplicación de `show_price`/`available_for_order`.
-4. Coste/budget real y RAG ACL deny-by-default.
-5. Egress, proxy, Chatwoot, health, perfiles, límites y observabilidad runtime.
-6. Backup/restore en instalación vacía y release/rollback trazable.
-7. Dependencias, SBOM, licencias y pruebas E2E/UI.
+Commit de implementación: `48051e8`.
+
+| Fecha | Control | Resultado | Alcance |
+|---|---|---|---|
+| 2026-08-02 | Corpus backend completo | 159 passed; 1 warning; 16,31 s | Unitarios/regresión/integración local: CAS, retries, ACL, health, importación, leases/checkpoints, LLM y PrestaShop; no sustituye E2E externo |
+| 2026-08-02 | Migraciones SQLite herméticas | 23 passed; 1 warning; 11,48 s | Clean, histórica, downgrade/reupgrade y nueva revisión `0003` reejecutable |
+| 2026-08-02 | PostgreSQL 15, run `a83f2d719c4e` | `head-cycle` verified; revisión final `0003` | Downgrade/reupgrade preserva datos y reserva activa; inbox y ledger presentes |
+| 2026-08-02 | PostgreSQL 15, run `b94e3f820d5a` | `historical-upgrade` verified; revisión final `0003` | Adopción histórica, 12 FKs, token legado hasheado y datos preservados |
+| 2026-08-02 | PostgreSQL 15, run `f38c7d264b9e` | `verified` normal y `python -O`; 0 residuos | Aprobación CAS: 1 ganador/1 conflicto; presupuesto LLM: 1 provider call/1 rate limit, gasto `0.000101`; concurrencia P0 intacta |
+| 2026-08-02 | Compose config / health contract | código 0; `/live` y `/ready` separados | Compose usa readiness de Bridge; fallo de DB devuelve 503 en pruebas dirigidas; no acredita stack arrancado |
+| 2026-08-02 | Ruff focalizado / compileall / diff | verde | `F,B,I` con `B008` excluido de forma explícita; bytecode y whitespace; la deuda global histórica permanece abierta |
+| 2026-08-02 | Secret hygiene y cleanup | 0 patrones de alta señal; 0 verificadores residuales | `.env` ignorado/no trazado; stack completo permaneció detenido |
+
+La evidencia cierra D-011, D-013, D-014, D-024, D-033, D-034 y D-036. D-010, D-019, D-020, D-021, D-022 y D-035 solo quedan parcialmente remediados o bloqueados: no se ha demostrado reconciliación del efecto externo ambiguo, handoff visible en Chatwoot real, corpus DLP/prompt-injection, circuit breaker/outbox/DLQ, provisioning único ni exactamente-once frente a un crash entre proveedor y checkpoint.
+
+No se arrancó el full stack, no se usaron credenciales/datos reales y no se contactaron proveedores externos. Los contenedores PostgreSQL fueron efímeros, aislados, etiquetados y eliminados; no se tocó `agent-platform-fixed-bridge-db-1` ni ningún proyecto ajeno. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
+
+## Próxima evidencia obligatoria — P1 restante de Fase 2
+
+1. Reconciliación/outbox/DLQ y fault injection de webhooks/GHL en cada frontera ambigua.
+2. Executor de herramientas deny-by-default, clasificación/DLP y corpus de exfiltración/prompt injection.
+3. Egress, proxy, Chatwoot, perfiles, límites y observabilidad verificados en runtime seguro.
+4. Backup/restore en instalación vacía y release/rollback trazable.
+5. Dependencias, SBOM, licencias y pruebas E2E/UI.
