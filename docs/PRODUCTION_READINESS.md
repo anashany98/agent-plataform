@@ -30,7 +30,7 @@ Solo se emplean los estados autorizados:
 
 | ID | Criterio obligatorio | Estado | Evidencia actual | Bloqueo para aprobarlo |
 |---:|---|---|---|---|
-| PR-01 | Cero defectos P0 abiertos | BLOCKED | El registro de defectos de la auditoría contabiliza cinco P0; además, su tabla maestra clasifica restore y preparación de piloto como P0. | Reproducir, corregir y verificar todos los P0; el registro consolidado debe quedar en cero para la release candidata. |
+| PR-01 | Cero defectos P0 abiertos | BLOCKED | La reproducción actual mantiene cinco P0 heredados y añade D-031 por aislamiento explícito ausente: seis P0 abiertos. | Corregir y verificar todos los P0; el registro consolidado debe quedar en cero para la release candidata. |
 | PR-02 | P1 críticos del núcleo corregidos | BLOCKED | Se registraron 21 P1, incluidos egress, proxy, Chatwoot, RBAC, integraciones, RAG, dependencias, health y observabilidad. | Cerrar P1 críticos con pruebas de regresión y evidencia runtime; no basta con código o health. |
 | PR-03 | Sin mocks en producción | BLOCKED | Los 31 tests usan SQLite, demo, mock LLM, stubs, TF-IDF y rate limit deshabilitado; no existe evidencia de un arranque production fail-closed. | Bloquear mocks/stubs por configuración y probar el perfil production sin ellos. |
 | PR-04 | Sin datos demo visibles | BLOCKED | La DB auditada contenía 100 productos `source=demo` y la búsqueda no filtraba el origen. | Segregar seeds, prohibir demo en producción y demostrar con tests/API/UI que no aparece. |
