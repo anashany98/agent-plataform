@@ -108,6 +108,8 @@ def test_stale_processing_idempotency_claim_can_be_recovered():
 
 def test_prestashop_contract_normalizes_localized_products(monkeypatch):
     adapter = PrestaShopAdapter()
+    adapter.country_id = adapter.fiscal_country_id = "0"
+    adapter.currency_id = "0"
     async def fake_get(resource, params):
         if resource == 'stock_availables': return {'stock_availables': [{'quantity': '7'}]}
         return {'products': [{'id': 42, 'reference': 'OF-42', 'name': {'language': [{'value': 'Silla Ergo'}]}, 'description_short': 'Ergonómica', 'price': '199.95', 'id_category_default': 3, 'active': 1}]}
@@ -151,6 +153,8 @@ def test_activepieces_contract_normalizes_webhook_path(monkeypatch):
 
 def test_prestashop_enrichment_includes_features_combinations_and_specific_prices(monkeypatch):
     adapter = PrestaShopAdapter()
+    adapter.country_id = adapter.fiscal_country_id = "0"
+    adapter.currency_id = "0"
 
     async def fake_get(resource, params):
         if resource == 'products':

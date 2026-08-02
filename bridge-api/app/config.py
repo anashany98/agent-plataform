@@ -1,8 +1,7 @@
 import os
-from typing import List
 
+from pydantic import PositiveInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 TRUE_VALUES = {"true", "1", "yes", "on"}
 
@@ -19,7 +18,8 @@ class Settings(BaseSettings):
     PILOT_MODE: bool = _bool("PILOT_MODE", "true")
     INSTALLATION_ID: str = os.getenv("INSTALLATION_ID", "development-local")
     AUTO_CREATE_SCHEMA: bool = _bool("AUTO_CREATE_SCHEMA", "false")
-    AUTO_SEED_DEMO_DATA: bool = _bool("AUTO_SEED_DEMO_DATA", "false")
+    ALLOW_DEMO_DATA: bool = False
+    AUTO_SEED_DEMO_DATA: bool = False
 
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://bridge_user:bridge_pass@localhost:5433/bridge_db")
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://bridge-redis:6379/0")
@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     PRESTASHOP_BASE_URL: str = os.getenv("PRESTASHOP_BASE_URL", "")
     PRESTASHOP_API_KEY: str = os.getenv("PRESTASHOP_API_KEY", "")
     PRESTASHOP_SHOP_ID: str = os.getenv("PRESTASHOP_SHOP_ID", "")
+    PRESTASHOP_SHOP_GROUP_ID: str = os.getenv("PRESTASHOP_SHOP_GROUP_ID", "")
+    PRESTASHOP_COUNTRY_ID: str = os.getenv("PRESTASHOP_COUNTRY_ID", "")
+    PRESTASHOP_CURRENCY_ID: str = os.getenv("PRESTASHOP_CURRENCY_ID", "")
 
     GHL_BASE_URL: str = os.getenv("GHL_BASE_URL", "https://services.leadconnectorhq.com")
     GHL_API_TOKEN: str = os.getenv("GHL_API_TOKEN", "")
@@ -102,17 +105,19 @@ class Settings(BaseSettings):
     INVOICE_SERIES: str = os.getenv("INVOICE_SERIES", "INV-2026-")
     SHIPPING_FLAT_RATE: float = float(os.getenv("SHIPPING_FLAT_RATE", "15.00"))
     FREE_SHIPPING_THRESHOLD: float = float(os.getenv("FREE_SHIPPING_THRESHOLD", "300.00"))
+    QUOTE_CONFIRMATION_TTL_SEC: PositiveInt = 1800
+    STOCK_RESERVATION_TTL_SEC: PositiveInt = 900
 
     @property
-    def allowed_origins(self) -> List[str]:
+    def allowed_origins(self) -> list[str]:
         return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
     @property
-    def rag_allowed_roots(self) -> List[str]:
+    def rag_allowed_roots(self) -> list[str]:
         return [root.strip() for root in self.RAG_ALLOWED_ROOTS.split(",") if root.strip()]
 
     @property
-    def allowed_hosts(self) -> List[str]:
+    def allowed_hosts(self) -> list[str]:
         return [host.strip() for host in self.ALLOWED_HOSTS.split(",") if host.strip()]
 
     @property
@@ -136,6 +141,10 @@ class Settings(BaseSettings):
             errors.append("ALLOW_MOCK_LLM/ALLOW_INTEGRATION_STUBS")
         if self.AUTO_CREATE_SCHEMA:
             errors.append("AUTO_CREATE_SCHEMA")
+        if self.ALLOW_DEMO_DATA:
+            errors.append("ALLOW_DEMO_DATA")
+        if self.AUTO_SEED_DEMO_DATA:
+            errors.append("AUTO_SEED_DEMO_DATA")
         if errors:
             raise RuntimeError("Configuración insegura para producción: " + ", ".join(errors))
 

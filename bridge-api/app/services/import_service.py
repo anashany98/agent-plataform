@@ -9,6 +9,11 @@ from openpyxl import load_workbook
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.catalog_policy import (
+    is_demo_source,
+    is_trusted_product_source,
+    normalize_product_source,
+)
 from app.config import settings
 from app.models.models import Customer, Pricelist, Product
 
@@ -92,6 +97,11 @@ class ImportService:
                     tax_rate = Decimal(str(item.get("tax_rate", settings.DEFAULT_VAT_RATE)))
                     if price < 0 or stock < 0 or tax_rate < 0 or tax_rate > 1:
                         raise ValueError("precio, stock o tipo impositivo fuera de rango")
+                    source = normalize_product_source(item.get("source") or "import")
+                    if is_demo_source(source) and not settings.ALLOW_DEMO_DATA:
+                        raise ValueError("los datos demo no están permitidos en esta instalación")
+                    if not is_demo_source(source) and not is_trusted_product_source(source):
+                        raise ValueError("el origen del producto no está autorizado")
                     if self.db.query(Product).filter(Product.sku == sku).first():
                         raise ValueError("SKU ya existente")
                     prepared.append(
@@ -103,7 +113,7 @@ class ImportService:
                             description=str(item.get("description") or "").strip() or None,
                             category=str(item.get("category") or "General").strip(),
                             attributes=item.get("attributes") if isinstance(item.get("attributes"), dict) else {},
-                            source=str(item.get("source") or "import").strip(),
+                            source=source,
                             source_url=str(item.get("source_url") or "").strip() or None,
                             base_price=price,
                             tax_rate=tax_rate,

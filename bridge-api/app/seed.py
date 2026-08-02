@@ -6,13 +6,9 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import SessionLocal
 from app.models.models import (
-    ApprovalRequest,
     Customer,
-    InvoiceDraft,
-    Order,
     Pricelist,
     Product,
-    Quote,
     User,
 )
 from app.security import hash_password
@@ -35,7 +31,10 @@ def seed_database() -> None:
             )
             db.commit()
 
-        if not settings.AUTO_SEED_DEMO_DATA or db.query(Customer).count() > 0:
+        if not (settings.ALLOW_DEMO_DATA and settings.AUTO_SEED_DEMO_DATA):
+            return
+
+        if db.query(Customer).count() > 0:
             return
 
         pricelists = [

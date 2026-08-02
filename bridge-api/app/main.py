@@ -5,17 +5,17 @@ import json
 import re
 import time
 import uuid
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile, status
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import settings
 from app.database import Base, engine, get_db
@@ -32,11 +32,12 @@ from app.models.models import (
     Quote,
     User,
 )
+from app.rate_limit import RateLimitMiddleware
 from app.security import (
     ADMIN_ROLES,
+    ALL_ROLES,
     OPERATOR_ROLES,
     READ_ROLES,
-    ALL_ROLES,
     Principal,
     create_access_token,
     hash_password,
@@ -44,7 +45,6 @@ from app.security import (
     validate_password_policy,
     verify_password,
 )
-from app.rate_limit import RateLimitMiddleware
 from app.seed import seed_database
 from app.services.activepieces_adapter import ActivepiecesAdapter, ActivepiecesIntegrationError
 from app.services.chatwoot_adapter import ChatwootAdapter, ChatwootIntegrationError
@@ -54,7 +54,6 @@ from app.services.import_service import ImportService, ImportValidationError, pa
 from app.services.llm_router import LLMRouterService
 from app.services.prestashop_adapter import PrestaShopAdapter, PrestaShopIntegrationError
 from app.services.rag_service import RAGError, RAGService
-
 
 settings.validate_runtime_security()
 
@@ -319,6 +318,66 @@ def _extract_product_query(content: str) -> str:
     return clean or "Industrial"
 
 
+def _authoritative_prestashop_tax_rate(remote: Dict[str, Any]) -> Decimal:
+    if remote.get("tax_rate") is None:
+        raise PrestaShopIntegrationError(
+            "PrestaShop no devolvió una regla fiscal verificable para el producto"
+        )
+    try:
+        tax_rate = Decimal(str(remote["tax_rate"]))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise PrestaShopIntegrationError("PrestaShop devolvió un tipo impositivo inválido") from exc
+    if tax_rate < 0 or tax_rate > 1:
+        raise PrestaShopIntegrationError("PrestaShop devolvió un tipo impositivo fuera de rango")
+    return tax_rate
+
+
+def _extract_confirmation_token(content: str) -> str | None:
+    match = re.fullmatch(r"\s*CONFIRMAR\s+([A-F0-9]{32})\s*", content, flags=re.IGNORECASE)
+    return match.group(1).upper() if match else None
+
+
+def _verified_confirmation_actor(
+    db: Session,
+    state: ConversationState,
+    body: Dict[str, Any],
+    account_id: str,
+    conversation_id: str,
+) -> str:
+    if not state.customer_id:
+        raise HTTPException(status_code=409, detail="La acción pendiente no está vinculada a un cliente")
+    if not state.active_quote_id:
+        raise HTTPException(status_code=409, detail="La acción pendiente no tiene presupuesto")
+    quote = db.query(Quote).filter(Quote.id == state.active_quote_id).first()
+    if not quote:
+        raise HTTPException(status_code=409, detail="El presupuesto pendiente ya no existe")
+    if (
+        quote.customer_id != state.customer_id
+        or str(quote.account_id or "") != str(account_id)
+        or str(quote.conversation_id or "") != str(conversation_id)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="El presupuesto no pertenece al cliente y conversación pendientes",
+        )
+    customer = db.query(Customer).filter(Customer.id == state.customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=409, detail="El cliente de la acción pendiente ya no existe")
+    sender = body.get("sender") or {}
+    sender_email = str(sender.get("email") or "").strip().lower()
+    customer_email = str(customer.email or "").strip().lower()
+    if not customer_email.endswith("@invalid.local"):
+        if not sender_email or not hmac.compare_digest(sender_email, customer_email):
+            raise HTTPException(status_code=403, detail="El remitente no coincide con el cliente del presupuesto")
+        return sender_email
+
+    sender_id = str(sender.get("id") or "").replace("@", "-")[:80]
+    expected_placeholder = f"chatwoot-{account_id}-{conversation_id}-{sender_id}@invalid.local"
+    if not sender_id or not hmac.compare_digest(expected_placeholder, customer_email):
+        raise HTTPException(status_code=403, detail="No se puede verificar al remitente de la confirmación")
+    return f"chatwoot-sender:{sender_id}"
+
+
 @app.post("/auth/login", tags=["Autenticación"])
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == req.username).first()
@@ -531,7 +590,6 @@ async def receive_chatwoot_webhook(
     request: Request,
     x_chatwoot_signature: Optional[str] = Header(default=None),
     x_chatwoot_timestamp: Optional[str] = Header(default=None),
-    x_chatwoot_delivery: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
     raw_body = await request.body()
@@ -545,8 +603,10 @@ async def receive_chatwoot_webhook(
     message_id = str(body.get("id") or "")
     if not message_id:
         raise HTTPException(status_code=422, detail="El webhook no contiene un ID de mensaje")
-    delivery_key = (x_chatwoot_delivery or message_id).strip()
-    idempotency_key = f"chatwoot:{delivery_key}"
+    account_hint = str((body.get("account") or {}).get("id") or "unknown")
+    # The authenticated payload is the replay boundary. X-Chatwoot-Delivery is
+    # not covered by the HMAC and therefore cannot select the idempotency key.
+    idempotency_key = f"chatwoot:{account_hint}:{message_id}"
     claimed, existing = _claim_idempotency(db, idempotency_key)
     if not claimed:
         return {
@@ -577,22 +637,32 @@ async def receive_chatwoot_webhook(
 
         tools = DeterministicToolsService(db)
         lowered = content.lower()
+        confirmation_token = _extract_confirmation_token(content)
         if any(term in lowered for term in ("humano", "persona", "comercial")):
             await chatwoot_adapter.toggle_human_handoff(int(account_id), int(conversation_id), "open")
             await chatwoot_adapter.add_private_note(int(account_id), int(conversation_id), "El cliente ha solicitado atención humana.")
             reply = "Te he transferido al equipo comercial. Te atenderán lo antes posible."
             await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
             result = {"status": "success", "action": "human_handoff", "reply": reply}
-        elif any(term in lowered for term in ("confirmar", "acepto")):
+        elif confirmation_token:
             state_row = db.query(ConversationState).filter(
                 ConversationState.account_id == account_id,
                 ConversationState.conversation_id == conversation_id,
             ).first()
             if not state_row or not state_row.active_quote_id:
                 raise HTTPException(status_code=409, detail="Esta conversación no tiene un presupuesto pendiente")
+            confirmed_by = _verified_confirmation_actor(
+                db,
+                state_row,
+                body,
+                account_id,
+                conversation_id,
+            )
             order_result = tools.confirm_quote_transactional(
                 state_row.active_quote_id,
                 f"conversation:{account_id}:{conversation_id}:quote:{state_row.active_quote_id}",
+                confirmation_token,
+                confirmed_by=confirmed_by,
             )
             await chatwoot_adapter.add_labels(int(account_id), int(conversation_id), ["venta_confirmada", "pendiente_aprobacion"])
             reply = (
@@ -606,12 +676,23 @@ async def receive_chatwoot_webhook(
                 **order_result,
                 "reply": reply,
             }
+        elif any(term in lowered for term in ("confirmar", "acepto", "aceptar")):
+            # Las frases libres, incluidas las negaciones, jamás ejecutan un
+            # efecto comercial. La confirmación solo admite el comando exacto
+            # ligado al token efímero emitido para el presupuesto pendiente.
+            reply = (
+                "No se ha confirmado ningún pedido. Para confirmar usa exactamente "
+                "el comando CONFIRMAR <TOKEN> mostrado en el presupuesto vigente."
+            )
+            await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
+            result = {"status": "success", "action": "confirmation_not_applied", "reply": reply}
         elif any(term in lowered for term in ("necesito", "comprar", "busco", "unidades", "producto")):
             query = _extract_product_query(content)
             qty = _extract_quantity(content)
             if prestashop_adapter.configured():
                 remote_products = await prestashop_adapter.search_products(query, limit=10)
                 for remote in remote_products:
+                    authoritative_tax_rate = _authoritative_prestashop_tax_rate(remote)
                     product = db.query(Product).filter(
                         Product.external_id == remote["external_id"], Product.source == "prestashop"
                     ).first()
@@ -630,13 +711,14 @@ async def receive_chatwoot_webhook(
                             source="prestashop",
                             source_url=remote.get("source_url"),
                             base_price=Decimal(str(remote["base_price"])),
-                            tax_rate=Decimal(str(remote.get("tax_rate", settings.DEFAULT_VAT_RATE))),
+                            tax_rate=authoritative_tax_rate,
                             stock_quantity=int(remote["stock_quantity"]),
                             reserved_stock=0,
                         )
                         db.add(product)
                     else:
                         product.base_price = Decimal(str(remote["base_price"]))
+                        product.tax_rate = authoritative_tax_rate
                         product.stock_quantity = int(remote["stock_quantity"])
                         product.name = remote["name"]
                         product.description = remote.get("description")
@@ -671,7 +753,8 @@ async def receive_chatwoot_webhook(
                         f"Presupuesto {quote['quote_id']}: {product['name']}, {qty} unidades. "
                         f"Subtotal {quote['subtotal']:.2f} {quote['currency']}, impuestos {quote['tax_total']:.2f}, "
                         f"envío {quote['shipping_total']:.2f} y total {quote['grand_total']:.2f}. "
-                        f"Responde CONFIRMAR para solicitar el pedido.{contact_notice}"
+                        f"Responde exactamente CONFIRMAR {quote['confirmation_token']} para solicitar el pedido. "
+                        f"El token caduca y solo autoriza este presupuesto.{contact_notice}"
                     )
                     await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
                     result = {
@@ -857,11 +940,17 @@ def calculate_price_tool(
     product_id: str,
     qty: int = Query(ge=1, le=100_000),
     customer_id: Optional[str] = None,
+    combination_id: Optional[str] = None,
     _: Principal = Depends(require_roles(*READ_ROLES)),
     db: Session = Depends(get_db),
 ):
     try:
-        return DeterministicToolsService(db).calculate_price(product_id, qty, customer_id)
+        return DeterministicToolsService(db).calculate_price(
+            product_id,
+            qty,
+            customer_id,
+            combination_id=combination_id,
+        )
     except BusinessRuleError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1081,10 +1170,15 @@ async def sync_prestashop_products(
 ):
     try:
         remote_products = await prestashop_adapter.list_products(limit=limit, include_details=include_details)
+        remote_tax_rates = {
+            str(remote["external_id"]): _authoritative_prestashop_tax_rate(remote)
+            for remote in remote_products
+        }
     except PrestaShopIntegrationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     changes = {"created": 0, "updated": 0, "unchanged": 0, "conflicts": []}
     for remote in remote_products:
+        authoritative_tax_rate = remote_tax_rates[str(remote["external_id"])]
         product = db.query(Product).filter(
             Product.external_id == remote["external_id"], Product.source == "prestashop"
         ).first()
@@ -1104,7 +1198,7 @@ async def sync_prestashop_products(
                     source="prestashop",
                     source_url=remote.get("source_url"),
                     base_price=Decimal(str(remote["base_price"])),
-                    tax_rate=Decimal(str(settings.DEFAULT_VAT_RATE)),
+                    tax_rate=authoritative_tax_rate,
                     stock_quantity=int(remote["stock_quantity"]),
                     reserved_stock=0,
                 )
@@ -1122,6 +1216,7 @@ async def sync_prestashop_products(
             continue
         before = (
             str(product.base_price),
+            str(product.tax_rate),
             product.stock_quantity,
             product.name,
             product.description,
@@ -1131,6 +1226,7 @@ async def sync_prestashop_products(
         )
         after = (
             str(Decimal(str(remote["base_price"]))),
+            str(authoritative_tax_rate),
             int(remote["stock_quantity"]),
             remote["name"],
             remote.get("description"),
@@ -1142,6 +1238,7 @@ async def sync_prestashop_products(
             changes["unchanged"] += 1
         else:
             product.base_price = Decimal(str(remote["base_price"]))
+            product.tax_rate = authoritative_tax_rate
             product.stock_quantity = int(remote["stock_quantity"])
             product.name = remote["name"]
             product.description = remote.get("description")

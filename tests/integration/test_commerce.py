@@ -1,11 +1,12 @@
 import hashlib
 import hmac
 import json
+import re
 import time
 import uuid
 
 from app.database import SessionLocal
-from app.models.models import ApprovalRequest, Customer, InvoiceDraft, Order, Product, Quote, StockReservation
+from app.models.models import InvoiceDraft, Order, Product, Quote, StockReservation
 from app.services.deterministic_tools import DeterministicToolsService
 
 
@@ -28,14 +29,21 @@ def quote_message(conversation_id: int, content: str = 'Necesito 2 unidades Indu
     }
 
 
-def confirm_message(conversation_id: int):
+def confirmation_token(response) -> str:
+    match = re.search(r'CONFIRMAR ([A-F0-9]{32})', response.json()['reply'])
+    assert match, response.text
+    return match.group(1)
+
+
+def confirm_message(conversation_id: int, token: str):
     return {
         'event': 'message_created',
         'id': f'confirm-{uuid.uuid4().hex}',
         'message_type': 'incoming',
-        'content': 'CONFIRMAR',
+        'content': f'CONFIRMAR {token}',
         'conversation': {'id': conversation_id},
         'account': {'id': 1},
+        'sender': {'email': f'cliente{conversation_id}@example.com', 'name': f'Cliente {conversation_id}'},
     }
 
 
@@ -56,10 +64,10 @@ def test_conversation_can_only_confirm_its_own_quote(client):
     b = signed(client, quote_message(2202, 'Necesito 3 unidades Industrial Modelo 6'))
     assert a.status_code == b.status_code == 200
 
-    wrong = signed(client, confirm_message(3303))
+    wrong = signed(client, confirm_message(3303, confirmation_token(a)))
     assert wrong.status_code == 409
 
-    confirmed_a = signed(client, confirm_message(1101))
+    confirmed_a = signed(client, confirm_message(1101, confirmation_token(a)))
     assert confirmed_a.status_code == 200, confirmed_a.text
     result = confirmed_a.json()
     db = SessionLocal()
@@ -77,8 +85,9 @@ def test_repeated_confirmation_is_business_idempotent(client):
     conversation = 4404
     quote = signed(client, quote_message(conversation))
     assert quote.status_code == 200
-    first = signed(client, confirm_message(conversation))
-    second = signed(client, confirm_message(conversation))
+    token = confirmation_token(quote)
+    first = signed(client, confirm_message(conversation, token))
+    second = signed(client, confirm_message(conversation, token))
     assert first.status_code == second.status_code == 200
     assert first.json()['order_id'] == second.json()['order_id']
     assert second.json()['action'] == 'order_already_exists'
@@ -120,8 +129,9 @@ def test_insufficient_stock_rolls_back_entire_order(client):
 
 def test_approval_is_single_use_and_reviewer_comes_from_token(client, auth_headers):
     conversation = 6606
-    assert signed(client, quote_message(conversation)).status_code == 200
-    confirmed = signed(client, confirm_message(conversation))
+    quote = signed(client, quote_message(conversation))
+    assert quote.status_code == 200
+    confirmed = signed(client, confirm_message(conversation, confirmation_token(quote)))
     approval_id = confirmed.json()['approval_id']
     first = client.post(f'/approvals/{approval_id}/approve', json={}, headers=auth_headers)
     assert first.status_code == 200
@@ -135,8 +145,17 @@ def test_atomic_stock_reservation_rejects_overbooking():
     try:
         tools = DeterministicToolsService(db)
         product = tools.search_products('Industrial')[0]
+        quote = tools.create_quote('cust-004', [{'product_id': product['id'], 'qty': 1}])
+        order = tools.confirm_quote_transactional(
+            quote['quote_id'],
+            f"integration-overbooking:{quote['quote_id']}",
+            quote['confirmation_token'],
+            confirmed_by='cust-004',
+        )
         available = tools.check_stock(product['id'])['available_stock']
-        assert tools.reserve_stock(product['id'], available + 1, order_id=f'order-over-{uuid.uuid4().hex}') is False
+        reserved_before = tools.check_stock(product['id'])['reserved_stock']
+        assert tools.reserve_stock(product['id'], available + 1, order_id=order['order_id']) is False
+        assert tools.check_stock(product['id'])['reserved_stock'] == reserved_before
     finally:
         db.close()
 

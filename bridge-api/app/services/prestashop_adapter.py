@@ -25,6 +25,11 @@ class PrestaShopAdapter:
         self.base_url = settings.PRESTASHOP_BASE_URL.rstrip("/")
         self.api_key = settings.PRESTASHOP_API_KEY
         self.shop_id = settings.PRESTASHOP_SHOP_ID
+        self.shop_group_id = settings.PRESTASHOP_SHOP_GROUP_ID
+        self.country_id = settings.PRESTASHOP_COUNTRY_ID
+        self.fiscal_country_id = settings.PRESTASHOP_COUNTRY_ID
+        self.currency_id = settings.PRESTASHOP_CURRENCY_ID
+        self._tax_rate_cache: dict[tuple[str, str], Decimal] = {}
 
     def configured(self) -> bool:
         return bool(self.base_url and self.api_key)
@@ -35,6 +40,8 @@ class PrestaShopAdapter:
         request_params = {**params, "output_format": "JSON"}
         if self.shop_id:
             request_params["id_shop"] = self.shop_id
+        if self.shop_group_id:
+            request_params["id_group_shop"] = self.shop_group_id
         try:
             async with httpx.AsyncClient(
                 timeout=30.0,
@@ -99,7 +106,11 @@ class PrestaShopAdapter:
             payload = await self._get(
                 "products",
                 {
-                    "display": "[id,reference,name,description_short,price,id_category_default,active,manufacturer_name,available_for_order,show_price]",
+                    "display": (
+                        "[id,reference,name,description_short,price,id_category_default,"
+                        "id_tax_rules_group,id_default_combination,id_shop_default,active,"
+                        "manufacturer_name,available_for_order,show_price]"
+                    ),
                     "filter[name]": f"%{term}%",
                     "filter[active]": "[1]",
                     "limit": f"0,{safe_limit}",
@@ -129,7 +140,11 @@ class PrestaShopAdapter:
         payload = await self._get(
             "products",
             {
-                "display": "[id,reference,name,description_short,price,id_category_default,active,manufacturer_name,available_for_order,show_price]",
+                "display": (
+                    "[id,reference,name,description_short,price,id_category_default,"
+                    "id_tax_rules_group,id_default_combination,id_shop_default,active,"
+                    "manufacturer_name,available_for_order,show_price]"
+                ),
                 "filter[active]": "[1]",
                 "limit": f"{max(0, offset)},{safe_limit}",
                 "sort": "[id_ASC]",
@@ -162,6 +177,25 @@ class PrestaShopAdapter:
         features = details.get("features", [])
         combinations = details.get("combinations", [])
         specific_prices = details.get("specific_prices", [])
+        tax_rules_group_id = str(
+            details.get("id_tax_rules_group")
+            or item.get("id_tax_rules_group")
+            or "0"
+        )
+        default_combination_id = str(
+            details.get("id_default_combination")
+            or item.get("id_default_combination")
+            or "0"
+        )
+        shop_id = str(
+            self.shop_id
+            or details.get("id_shop_default")
+            or item.get("id_shop_default")
+            or "0"
+        )
+        tax_rate = await self.get_tax_rate(tax_rules_group_id)
+        country_id = await self.get_country_id()
+        currency_id = await self.get_currency_id()
 
         return {
             "external_id": product_id,
@@ -169,6 +203,7 @@ class PrestaShopAdapter:
             "name": self._localized(item.get("name")) or f"Producto {product_id}",
             "description": self._clean_html_text(self._localized(item.get("description_short"))),
             "base_price": float(base_price),
+            "tax_rate": float(tax_rate),
             "stock_quantity": stock,
             "category": category_name or category_id or "PrestaShop",
             "attributes": {
@@ -177,6 +212,12 @@ class PrestaShopAdapter:
                 "show_price": str(item.get("show_price", "1")).lower() in {"1", "true"},
                 "manufacturer": self._localized(item.get("manufacturer_name")),
                 "id_category_default": item.get("id_category_default"),
+                "tax_rules_group_id": tax_rules_group_id,
+                "default_combination_id": default_combination_id,
+                "shop_id": shop_id,
+                "shop_group_id": str(self.shop_group_id or "0"),
+                "country_id": country_id,
+                "currency_id": currency_id,
                 "features": features,
                 "combinations": combinations,
                 "specific_prices": specific_prices,
@@ -204,6 +245,9 @@ class PrestaShopAdapter:
             raise PrestaShopIntegrationError("Producto no encontrado en PrestaShop")
         product = products[0]
         return {
+            "id_tax_rules_group": str(product.get("id_tax_rules_group") or "0"),
+            "id_default_combination": str(product.get("id_default_combination") or "0"),
+            "id_shop_default": str(product.get("id_shop_default") or "0"),
             "features": await self.get_features(product),
             "combinations": await self.get_combinations(product_id, product),
             "specific_prices": await self.get_specific_prices(product_id),
@@ -378,28 +422,30 @@ class PrestaShopAdapter:
         return result
 
     async def get_specific_prices(self, product_id: str) -> List[Dict[str, Any]]:
-        try:
-            payload = await self._get(
-                "specific_prices",
-                {
-                    "filter[id_product]": f"[{product_id}]",
-                    "display": "[id,id_shop,id_currency,id_country,id_group,id_customer,id_product_attribute,price,from_quantity,reduction,reduction_tax,reduction_type,from,to]",
-                    "limit": "0,500",
-                },
-            )
-        except PrestaShopIntegrationError:
-            return []
+        payload = await self._get(
+            "specific_prices",
+            {
+                "filter[id_product]": f"[{product_id}]",
+                "display": "[id,id_shop_group,id_shop,id_cart,id_currency,id_country,id_group,id_customer,id_product_attribute,id_specific_price_rule,price,from_quantity,reduction,reduction_tax,reduction_type,from,to]",
+                "limit": "0,500",
+            },
+        )
         result: List[Dict[str, Any]] = []
         for row in self._rows(payload, "specific_prices"):
             result.append(
                 {
                     "id": str(row.get("id") or ""),
+                    "shop_group_id": str(row.get("id_shop_group") or "0"),
                     "combination_id": str(row.get("id_product_attribute") or "0"),
                     "shop_id": str(row.get("id_shop") or "0"),
+                    "cart_id": str(row.get("id_cart") or "0"),
                     "currency_id": str(row.get("id_currency") or "0"),
                     "country_id": str(row.get("id_country") or "0"),
                     "group_id": str(row.get("id_group") or "0"),
                     "customer_id": str(row.get("id_customer") or "0"),
+                    "specific_price_rule_id": str(
+                        row.get("id_specific_price_rule") or "0"
+                    ),
                     "price": float(self._decimal(row.get("price"), field="Precio específico", product_id=product_id)),
                     "from_quantity": int(row.get("from_quantity") or 1),
                     "reduction": float(self._decimal(row.get("reduction"), field="Reducción", product_id=product_id)),
@@ -410,6 +456,133 @@ class PrestaShopAdapter:
                 }
             )
         return result
+
+    async def get_country_id(self) -> str:
+        explicit = str(self.fiscal_country_id or self.country_id or "").strip()
+        if explicit:
+            self.country_id = explicit
+            self.fiscal_country_id = explicit
+            return explicit
+        iso_code = settings.COUNTRY.strip().upper()
+        if not iso_code:
+            raise PrestaShopIntegrationError(
+                "Falta el contexto de país requerido para resolver impuestos"
+            )
+        payload = await self._get(
+            "countries",
+            {
+                "filter[iso_code]": f"[{iso_code}]",
+                "filter[active]": "[1]",
+                "display": "[id,iso_code,active]",
+                "limit": "0,2",
+            },
+        )
+        rows = [
+            row
+            for row in self._rows(payload, "countries")
+            if str(row.get("active", "1")).lower() in {"1", "true"}
+        ]
+        if len(rows) != 1 or not str(rows[0].get("id") or "").strip():
+            raise PrestaShopIntegrationError(
+                f"No se pudo resolver un país PrestaShop único para {iso_code}"
+            )
+        resolved = str(rows[0]["id"]).strip()
+        self.country_id = resolved
+        self.fiscal_country_id = resolved
+        return resolved
+
+    async def get_currency_id(self) -> str:
+        explicit = str(self.currency_id or "").strip()
+        if explicit:
+            return explicit
+        iso_code = settings.CURRENCY.strip().upper()
+        if not iso_code:
+            raise PrestaShopIntegrationError(
+                "Falta el contexto de moneda requerido para calcular precios"
+            )
+        payload = await self._get(
+            "currencies",
+            {
+                "filter[iso_code]": f"[{iso_code}]",
+                "filter[active]": "[1]",
+                "display": "[id,iso_code,active]",
+                "limit": "0,2",
+            },
+        )
+        rows = [
+            row
+            for row in self._rows(payload, "currencies")
+            if str(row.get("active", "1")).lower() in {"1", "true"}
+        ]
+        if len(rows) != 1 or not str(rows[0].get("id") or "").strip():
+            raise PrestaShopIntegrationError(
+                f"No se pudo resolver una moneda PrestaShop única para {iso_code}"
+            )
+        self.currency_id = str(rows[0]["id"]).strip()
+        return self.currency_id
+
+    async def get_tax_rate(self, tax_rules_group_id: str) -> Decimal:
+        group_id = str(tax_rules_group_id or "0").strip()
+        if group_id in {"", "0"}:
+            return Decimal("0")
+        country_id = await self.get_country_id()
+        cache_key = (group_id, country_id)
+        if cache_key in self._tax_rate_cache:
+            return self._tax_rate_cache[cache_key]
+
+        rule_payload = await self._get(
+            "tax_rules",
+            {
+                "filter[id_tax_rules_group]": f"[{group_id}]",
+                "filter[id_country]": f"[{country_id}]",
+                "display": (
+                    "[id,id_tax_rules_group,id_state,id_country,zipcode_from,"
+                    "zipcode_to,id_tax,behavior,description]"
+                ),
+                "limit": "0,100",
+            },
+        )
+        rules = [
+            row
+            for row in self._rows(rule_payload, "tax_rules")
+            if str(row.get("id_state") or "0") in {"", "0"}
+            and str(row.get("zipcode_from") or "0") in {"", "0"}
+            and str(row.get("zipcode_to") or "0") in {"", "0"}
+        ]
+        if len(rules) != 1:
+            raise PrestaShopIntegrationError(
+                "Las reglas fiscales son inexistentes o ambiguas para el país configurado"
+            )
+        tax_id = str(rules[0].get("id_tax") or "").strip()
+        if not tax_id:
+            raise PrestaShopIntegrationError("La regla fiscal no referencia un impuesto")
+
+        tax_payload = await self._get(
+            "taxes",
+            {
+                "filter[id]": f"[{tax_id}]",
+                "display": "[id,rate,active,deleted]",
+                "limit": "0,2",
+            },
+        )
+        taxes = [
+            row
+            for row in self._rows(tax_payload, "taxes")
+            if str(row.get("active", "1")).lower() in {"1", "true"}
+            and str(row.get("deleted", "0")).lower() in {"0", "false", ""}
+        ]
+        if len(taxes) != 1:
+            raise PrestaShopIntegrationError("El impuesto de la regla no está activo o es ambiguo")
+        rate_percent = self._decimal(
+            taxes[0].get("rate"),
+            field="Tipo impositivo",
+            product_id=f"tax-rule-group-{group_id}",
+        )
+        if rate_percent < 0 or rate_percent > 100:
+            raise PrestaShopIntegrationError("El tipo impositivo está fuera de rango")
+        rate = rate_percent / Decimal("100")
+        self._tax_rate_cache[cache_key] = rate
+        return rate
 
     async def get_category_name(self, category_id: str) -> str:
         if not category_id:
@@ -434,6 +607,18 @@ class PrestaShopAdapter:
             params["filter[id_product_attribute]"] = f"[{combination_id}]"
         payload = await self._get("stock_availables", params)
         rows = self._rows(payload, "stock_availables")
+        if self.shop_id:
+            rows = [
+                row
+                for row in rows
+                if str(row.get("id_shop") or self.shop_id) == str(self.shop_id)
+            ]
+        if not combination_id:
+            variant_rows = [
+                row for row in rows if str(row.get("id_product_attribute") or "0") != "0"
+            ]
+            if variant_rows:
+                rows = variant_rows
         try:
             return sum(int(row.get("quantity") or 0) for row in rows)
         except (TypeError, ValueError) as exc:
@@ -466,8 +651,8 @@ class PrestaShopAdapter:
         # ni marcado arbitrario desde el catálogo.
         if not value:
             return ""
-        from html import unescape
         import re
+        from html import unescape
 
         without_scripts = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", value)
         without_tags = re.sub(r"(?s)<[^>]+>", " ", without_scripts)

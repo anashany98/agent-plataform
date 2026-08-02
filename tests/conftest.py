@@ -14,7 +14,8 @@ os.environ.update(
         'INITIAL_ADMIN_USERNAME': 'admin',
         'INITIAL_ADMIN_PASSWORD': 'Test-Password-123!',
         'AUTO_CREATE_SCHEMA': 'true',
-        'AUTO_SEED_DEMO_DATA': 'true',
+        'ALLOW_DEMO_DATA': 'false',
+        'AUTO_SEED_DEMO_DATA': 'false',
         'CHATWOOT_WEBHOOK_SECRET': 'test-chatwoot-secret',
         'CHATWOOT_API_TOKEN': '',
         'ALLOW_INTEGRATION_STUBS': 'true',
@@ -30,13 +31,59 @@ os.environ.update(
         'RATE_LIMIT_ENABLED': 'false',
         'RAG_MIN_SCORE': '0.05',
         'ALLOWED_ORIGINS': 'http://testserver',
+        'ALLOWED_HOSTS': 'testserver,localhost,127.0.0.1',
     }
 )
 
 import pytest
+from app.database import SessionLocal
+from app.main import app
+from app.models.models import Customer, Pricelist, Product
 from fastapi.testclient import TestClient
 
-from app.main import app
+
+@pytest.fixture(scope='session', autouse=True)
+def synthetic_business_fixtures() -> None:
+    """Provide explicit non-demo fixtures for the historical integration suite."""
+    from decimal import Decimal
+
+    db = SessionLocal()
+    try:
+        pricelist = db.query(Pricelist).filter(Pricelist.id == 'pl-distributor').first()
+        if not pricelist:
+            db.add(Pricelist(id='pl-distributor', name='Distribuidor de prueba', discount_percentage=Decimal('20')))
+        if not db.query(Customer).filter(Customer.id == 'cust-004').first():
+            db.add(
+                Customer(
+                    id='cust-004',
+                    name='Cliente sintético 004',
+                    email='customer-004@example.invalid',
+                    pricelist_id='pl-distributor',
+                )
+            )
+        for index in (1, 6):
+            sku = f'SKU-IND-{index:04d}'
+            if db.query(Product).filter(Product.sku == sku).first():
+                continue
+            db.add(
+                Product(
+                    id=f'fixture-industrial-{index}',
+                    external_id=f'fixture-industrial-{index}',
+                    sku=sku,
+                    name=f'Producto Industrial Modelo {index}',
+                    description='Fixture local sintético, no demo, para pruebas de comercio.',
+                    category='Industrial',
+                    attributes={'fixture': True},
+                    source='local',
+                    base_price=Decimal('100.00') + index,
+                    tax_rate=Decimal('0.21'),
+                    stock_quantity=100,
+                    reserved_stock=0,
+                )
+            )
+        db.commit()
+    finally:
+        db.close()
 
 
 @pytest.fixture(scope='session')
