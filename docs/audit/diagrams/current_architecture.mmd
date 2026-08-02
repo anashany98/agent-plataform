@@ -1,0 +1,14 @@
+flowchart LR
+  U["Cliente / operador"] --> PX["Reverse proxy BROKEN"]
+  PX --> PO["Portal"]
+  PX --> BR["Bridge API"]
+  PX --> CW["Chatwoot"]
+  PX --> FW["FlowWink"]
+  PX --> AP["Activepieces"]
+  BR --> BDB[("Bridge DB")]
+  CW --> CDB[("Chatwoot DB/Redis")]
+  AP --> ADB[("Activepieces DB/Redis")]
+  BR -.-x PS["PrestaShop"]
+  BR -.-x G["GHL"]
+  BR -.-x L["LLM/embeddings"]
+

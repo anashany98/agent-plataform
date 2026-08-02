@@ -1,0 +1,10 @@
+flowchart TD
+  PS["PrestaShop pretendido"] -. sync bloqueado .-> P[("Productos Bridge")]
+  DEMO["Seed demo"] --> P
+  P --> Q["Presupuesto"]
+  Q --> O["Pedido local"]
+  O --> R["Reserva local"]
+  O --> I["Borrador de factura"]
+  CW["Chatwoot"] -. webhook no e2e .-> Q
+  Q -. lead bloqueado .-> GHL["GHL"]
+

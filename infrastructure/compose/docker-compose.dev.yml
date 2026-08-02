@@ -1,0 +1,7 @@
+version: '3.8'
+
+services:
+  bridge-api:
+    environment:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=debug

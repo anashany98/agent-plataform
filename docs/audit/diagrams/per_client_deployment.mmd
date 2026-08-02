@@ -1,0 +1,7 @@
+flowchart TB
+  SRC["Código compartido"] --> A["agent-cliente-a"]
+  SRC --> B["agent-cliente-b"]
+  A --> RA["DB/Redis/redes/volúmenes A"]
+  B --> RB["DB/Redis/redes/volúmenes B"]
+  G["Checkout Git global"] --> SRC
+

@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  local-llm:
+    image: ollama/ollama:latest
+    container_name: local-llm-gpu
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

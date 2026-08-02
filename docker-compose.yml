@@ -1,0 +1,450 @@
+name: ${COMPOSE_PROJECT_NAME:-agent-platform}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-security: &default-security
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+x-activepieces-environment: &activepieces-environment
+  AP_ENVIRONMENT: prod
+  AP_ENCRYPTION_KEY: ${ACTIVEPIECES_ENCRYPTION_KEY}
+  AP_JWT_SECRET: ${ACTIVEPIECES_JWT_SECRET}
+  AP_POSTGRES_HOST: activepieces-db
+  AP_POSTGRES_PORT: 5432
+  AP_POSTGRES_DATABASE: ${ACTIVEPIECES_POSTGRES_DB:-activepieces}
+  AP_POSTGRES_USERNAME: ${ACTIVEPIECES_POSTGRES_USER:-activepieces}
+  AP_POSTGRES_PASSWORD: ${ACTIVEPIECES_POSTGRES_PASSWORD}
+  AP_REDIS_HOST: activepieces-redis
+  AP_REDIS_PORT: 6379
+  AP_REDIS_PASSWORD: ${ACTIVEPIECES_REDIS_PASSWORD}
+
+networks:
+  public:
+    driver: bridge
+  internal:
+    driver: bridge
+    internal: true
+  data:
+    driver: bridge
+    internal: true
+
+volumes:
+  bridge_db_data:
+  bridge_redis_data:
+  chatwoot_db_data:
+  chatwoot_redis_data:
+  chatwoot_storage_data:
+  activepieces_db_data:
+  activepieces_redis_data:
+  activepieces_cache:
+  bridge_uploads:
+
+services:
+  reverse-proxy:
+    profiles: ["core", "full"]
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    ports:
+      - "${PROXY_PORT:-9000}:8080"
+    environment:
+      PORTAL_HOST: ${PORTAL_HOST:-localhost}
+      API_HOST: ${API_HOST:-api.localhost}
+      CHATWOOT_HOST: ${CHATWOOT_HOST:-chat.localhost}
+      FLOWWINK_HOST: ${FLOWWINK_HOST:-agents.localhost}
+      ACTIVEPIECES_HOST: ${ACTIVEPIECES_HOST:-automation.localhost}
+    volumes:
+      - ./infrastructure/proxy/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    networks: [public, internal]
+    depends_on:
+      portal:
+        condition: service_healthy
+      bridge-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - CHOWN
+      - SETGID
+    cap_drop:
+      - ALL
+
+  portal:
+    profiles: ["core", "full"]
+    build:
+      context: ./portal
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose: ["8080"]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    read_only: true
+    tmpfs:
+      - /var/run
+      - /var/cache/nginx
+      - /tmp
+      - /etc/nginx/conf.d
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - SETGID
+    cap_drop:
+      - ALL
+
+  bridge-db:
+    profiles: ["core", "full"]
+    image: pgvector/pgvector:pg15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-bridge_db}
+      POSTGRES_USER: ${POSTGRES_USER:-bridge_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - bridge_db_data:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bridge_user} -d ${POSTGRES_DB:-bridge_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  bridge-redis:
+    profiles: ["core", "full"]
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - bridge_redis_data:/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  bridge-api:
+    profiles: ["core", "full"]
+    build:
+      context: ./bridge-api
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose: ["8005"]
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      INSTALLATION_ID: ${INSTALLATION_ID:-local}
+      AUTO_CREATE_SCHEMA: "false"
+      AUTO_SEED_DEMO_DATA: ${AUTO_SEED_DEMO_DATA:-false}
+      RUN_MIGRATIONS: "true"
+      PILOT_MODE: ${PILOT_MODE:-true}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bridge_user}:${POSTGRES_PASSWORD}@bridge-db:5432/${POSTGRES_DB:-bridge_db}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@bridge-redis:6379/0
+      AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_TOKEN_TTL_SEC: ${AUTH_TOKEN_TTL_SEC:-3600}
+      INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:9000}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,bridge-api}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_REQUESTS_PER_MINUTE: ${RATE_LIMIT_REQUESTS_PER_MINUTE:-120}
+      LOGIN_RATE_LIMIT_REQUESTS: ${LOGIN_RATE_LIMIT_REQUESTS:-8}
+      LOGIN_RATE_LIMIT_WINDOW_SEC: ${LOGIN_RATE_LIMIT_WINDOW_SEC:-900}
+      CHATWOOT_BASE_URL: http://chatwoot-web:3000
+      CHATWOOT_API_TOKEN: ${CHATWOOT_API_TOKEN:-}
+      CHATWOOT_WEBHOOK_SECRET: ${CHATWOOT_WEBHOOK_SECRET}
+      FLOWWINK_BASE_URL: http://flowwink-app:80
+      ACTIVEPIECES_BASE_URL: http://activepieces-app:80
+      ACTIVEPIECES_API_KEY: ${ACTIVEPIECES_API_KEY:-}
+      PRESTASHOP_BASE_URL: ${PRESTASHOP_BASE_URL:-}
+      PRESTASHOP_API_KEY: ${PRESTASHOP_API_KEY:-}
+      PRESTASHOP_SHOP_ID: ${PRESTASHOP_SHOP_ID:-}
+      GHL_BASE_URL: ${GHL_BASE_URL:-https://services.leadconnectorhq.com}
+      GHL_API_TOKEN: ${GHL_API_TOKEN:-}
+      GHL_LOCATION_ID: ${GHL_LOCATION_ID:-}
+      GHL_PIPELINE_ID: ${GHL_PIPELINE_ID:-}
+      GHL_PIPELINE_STAGE_ID: ${GHL_PIPELINE_STAGE_ID:-}
+      ALLOW_MOCK_LLM: ${ALLOW_MOCK_LLM:-false}
+      ALLOW_INTEGRATION_STUBS: ${ALLOW_INTEGRATION_STUBS:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      STANDARD_LLM_PROVIDER: ${STANDARD_LLM_PROVIDER:-ollama}
+      STANDARD_LLM_MODEL: ${STANDARD_LLM_MODEL:-qwen2.5:7b}
+      CHEAP_LLM_PROVIDER: ${CHEAP_LLM_PROVIDER:-ollama}
+      CHEAP_LLM_MODEL: ${CHEAP_LLM_MODEL:-qwen2.5:3b}
+      ADVANCED_LLM_PROVIDER: ${ADVANCED_LLM_PROVIDER:-openai}
+      ADVANCED_LLM_MODEL: ${ADVANCED_LLM_MODEL:-}
+      CRITICAL_LLM_PROVIDER: ${CRITICAL_LLM_PROVIDER:-anthropic}
+      CRITICAL_LLM_MODEL: ${CRITICAL_LLM_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://host.docker.internal:11434}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      RAG_MIN_SCORE: ${RAG_MIN_SCORE:-0.55}
+      RAG_MAX_FILE_MB: ${RAG_MAX_FILE_MB:-25}
+      RAG_UPLOAD_DIR: /data/uploads
+      RAG_ALLOWED_ROOTS: /data/uploads
+      OCR_ENABLED: ${OCR_ENABLED:-true}
+      COUNTRY: ${COUNTRY:-ES}
+      CURRENCY: ${CURRENCY:-EUR}
+      DEFAULT_VAT_RATE: ${DEFAULT_VAT_RATE:-0.21}
+      INVOICE_SERIES: ${INVOICE_SERIES:-INV-2026-}
+      SHIPPING_FLAT_RATE: ${SHIPPING_FLAT_RATE:-15.00}
+      FREE_SHIPPING_THRESHOLD: ${FREE_SHIPPING_THRESHOLD:-300.00}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - bridge_uploads:/data/uploads
+    networks: [internal, data]
+    depends_on:
+      bridge-db:
+        condition: service_healthy
+      bridge-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8005/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    read_only: true
+    tmpfs: [/tmp]
+    logging: *default-logging
+    <<: *default-security
+
+  flowwink-app:
+    profiles: ["core", "full"]
+    build:
+      context: ./vendor/flowwink
+      dockerfile: Dockerfile
+      args:
+        VITE_SUPABASE_URL: ${FLOWWINK_SUPABASE_URL:-}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${FLOWWINK_SUPABASE_ANON_KEY:-}
+        VITE_SUPABASE_PROJECT_ID: ${FLOWWINK_SUPABASE_PROJECT_ID:-}
+    restart: unless-stopped
+    expose: ["80"]
+    environment:
+      VITE_SUPABASE_URL: ${FLOWWINK_SUPABASE_URL:-}
+      VITE_SUPABASE_PUBLISHABLE_KEY: ${FLOWWINK_SUPABASE_ANON_KEY:-}
+      VITE_SUPABASE_PROJECT_ID: ${FLOWWINK_SUPABASE_PROJECT_ID:-}
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  chatwoot-db:
+    profiles: ["full"]
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${CHATWOOT_POSTGRES_DB:-chatwoot_db}
+      POSTGRES_USER: ${CHATWOOT_POSTGRES_USER:-chatwoot}
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD}
+    volumes:
+      - chatwoot_db_data:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CHATWOOT_POSTGRES_USER:-chatwoot} -d ${CHATWOOT_POSTGRES_DB:-chatwoot_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  chatwoot-redis:
+    profiles: ["full"]
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${CHATWOOT_REDIS_PASSWORD}"]
+    environment:
+      CHATWOOT_REDIS_PASSWORD: ${CHATWOOT_REDIS_PASSWORD}
+    volumes:
+      - chatwoot_redis_data:/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"${CHATWOOT_REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  chatwoot-web:
+    profiles: ["full"]
+    build:
+      context: ./vendor/chatwoot
+      dockerfile: docker/Dockerfile
+    image: ${COMPOSE_PROJECT_NAME:-agent-platform}-chatwoot:${CHATWOOT_BUILD_TAG:-b05f22da}
+    restart: unless-stopped
+    expose: ["3000"]
+    environment: &chatwoot-environment
+      NODE_ENV: production
+      RAILS_ENV: production
+      INSTALLATION_ENV: docker
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE}
+      POSTGRES_HOST: chatwoot-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DATABASE: ${CHATWOOT_POSTGRES_DB:-chatwoot_db}
+      POSTGRES_USERNAME: ${CHATWOOT_POSTGRES_USER:-chatwoot}
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD}
+      REDIS_URL: redis://:${CHATWOOT_REDIS_PASSWORD}@chatwoot-redis:6379/0
+      FRONTEND_URL: ${CHATWOOT_PUBLIC_URL:-http://localhost:9000/chatwoot}
+      RAILS_LOG_TO_STDOUT: "true"
+      ENABLE_ACCOUNT_SIGNUP: "false"
+    volumes:
+      - chatwoot_storage_data:/app/storage
+    networks: [internal, data]
+    depends_on:
+      chatwoot-db:
+        condition: service_healthy
+      chatwoot-redis:
+        condition: service_healthy
+    command: ["sh", "-c", "bundle exec rails db:chatwoot_prepare && bundle exec rails s -p 3000 -b 0.0.0.0"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/health || exit 1"]
+      interval: 20s
+      timeout: 8s
+      retries: 10
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  chatwoot-worker:
+    profiles: ["full"]
+    image: ${COMPOSE_PROJECT_NAME:-agent-platform}-chatwoot:${CHATWOOT_BUILD_TAG:-b05f22da}
+    restart: unless-stopped
+    environment: *chatwoot-environment
+    volumes:
+      - chatwoot_storage_data:/app/storage
+    networks: [internal, data]
+    depends_on:
+      chatwoot-web:
+        condition: service_healthy
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f sidekiq >/dev/null && bundle exec rails runner 'exit(Sidekiq::ProcessSet.new.size > 0 ? 0 : 1)' "]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  activepieces-db:
+    profiles: ["full"]
+    image: pgvector/pgvector:0.8.0-pg14
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${ACTIVEPIECES_POSTGRES_DB:-activepieces}
+      POSTGRES_USER: ${ACTIVEPIECES_POSTGRES_USER:-activepieces}
+      POSTGRES_PASSWORD: ${ACTIVEPIECES_POSTGRES_PASSWORD}
+    volumes:
+      - activepieces_db_data:/var/lib/postgresql/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ACTIVEPIECES_POSTGRES_USER:-activepieces} -d ${ACTIVEPIECES_POSTGRES_DB:-activepieces}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  activepieces-redis:
+    profiles: ["full"]
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${ACTIVEPIECES_REDIS_PASSWORD}"]
+    environment:
+      ACTIVEPIECES_REDIS_PASSWORD: ${ACTIVEPIECES_REDIS_PASSWORD}
+    volumes:
+      - activepieces_redis_data:/data
+    networks: [data]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"${ACTIVEPIECES_REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  activepieces-app:
+    profiles: ["full"]
+    image: ghcr.io/activepieces/activepieces:0.86.3
+    restart: unless-stopped
+    expose: ["80"]
+    volumes:
+      - activepieces_cache:/usr/src/app/cache
+    networks: [internal, data]
+    depends_on:
+      activepieces-db:
+        condition: service_healthy
+      activepieces-redis:
+        condition: service_healthy
+    environment:
+      <<: *activepieces-environment
+      AP_CONTAINER_TYPE: APP
+      AP_FRONTEND_URL: ${ACTIVEPIECES_PUBLIC_URL:-http://localhost:9000/activepieces}
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:80/api/v1/flags').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 20s
+      timeout: 8s
+      retries: 10
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  activepieces-worker:
+    profiles: ["full"]
+    image: ghcr.io/activepieces/activepieces:0.86.3
+    restart: unless-stopped
+    environment:
+      <<: *activepieces-environment
+      AP_CONTAINER_TYPE: WORKER
+      AP_FRONTEND_URL: http://activepieces-app:80
+    volumes:
+      - activepieces_cache:/usr/src/app/cache
+    networks: [internal, data]
+    depends_on:
+      activepieces-app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f node >/dev/null && node -e \"fetch('http://activepieces-app:80/api/v1/flags').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true

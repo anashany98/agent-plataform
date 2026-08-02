@@ -1,0 +1,11 @@
+flowchart LR
+  U["Cliente"] --> GW["Gateway TLS"]
+  GW --> CW["Chatwoot"]
+  GW --> PO["Portal mínimo"]
+  CW --> BR["Bridge modular + state machine"]
+  PO --> BR
+  BR --> DB[("DB por cliente")]
+  BR --> PS["PrestaShop autoridad"]
+  BR --> G["GHL"]
+  BR --> OBS["Observabilidad"]
+  BR --> BK["Backup restaurado"]

@@ -1,0 +1,13 @@
+sequenceDiagram
+  participant C as Cliente
+  participant W as Chatwoot
+  participant B as Bridge
+  participant D as DB
+  C->>W: Consulta
+  W-->>B: Webhook firmado
+  B->>D: Búsqueda sin filtro de origen
+  D-->>B: Datos locales/demo
+  B-->>W: Recomendación/presupuesto
+  C->>W: "No acepto"
+  B->>D: Pedido confirmado por substring
+

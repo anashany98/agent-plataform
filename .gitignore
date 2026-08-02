@@ -1,0 +1,49 @@
+# Secretos y configuración local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+.vite/
+npm-debug.log*
+
+# Datos y artefactos locales
+backups/
+infrastructure/backups/*
+!infrastructure/backups/.gitkeep
+uploads/
+logs/
+test-results/
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Datos por cliente (solo plantillas versionables)
+clients/*/backups/
+clients/*/documents/private/
+clients/*/imports/private/

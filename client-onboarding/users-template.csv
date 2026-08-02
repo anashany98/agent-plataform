@@ -1,0 +1,4 @@
+email,name,role,department
+admin@empresa.com,Administrador Principal,admin,Dirección
+ventas@empresa.com,Agente de Ventas 1,operator,Comercial
+soporte@empresa.com,Agente de Soporte,operator,Atención al Cliente

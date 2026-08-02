@@ -1,0 +1,27 @@
+{
+  "client_id": "cliente-piloto-rc1",
+  "company_name": "Corporación Piloto S.L.",
+  "brand_name": "Plataforma de Agentes IA",
+  "domain": "piloto-rc1.staging.local",
+  "accent_color": "#0284c7",
+  "language": "es",
+  "timezone": "Europe/Madrid",
+  "country": "ES",
+  "currency": "EUR",
+  "tax_rates": {
+    "standard_vat": 0.21,
+    "reduced_vat": 0.10,
+    "super_reduced_vat": 0.04
+  },
+  "invoice_series": "INV-2026-",
+  "pilot_mode": true,
+  "approval_rules": {
+    "high_value_order_threshold": 500.0,
+    "require_invoice_approval": true,
+    "require_discount_approval": true
+  },
+  "support_contact": {
+    "email": "soporte@piloto-rc1.local",
+    "phone": "+34 900 123 456"
+  }
+}

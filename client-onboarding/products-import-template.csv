@@ -1,0 +1,6 @@
+sku,name,description,category,base_price,tax_rate,stock_quantity
+PROD-001,Componente Industrial A,Componente electrónico de alta precisión,Componentes,45.00,0.21,150
+PROD-002,Sensor de Temperatura B,Sensor térmico digital para producción,Sensores,120.00,0.21,80
+PROD-003,Módulo de Control C,Módulo microprocesador automatizado,Módulos,350.00,0.21,30
+PROD-004,Cableado Estructurado D,Kit de conexión de red blindado,Accesorios,15.50,0.21,500
+PROD-005,Fuente Alimentación E,Fuente de alimentación regulada 24V,Alimentación,85.00,0.21,60

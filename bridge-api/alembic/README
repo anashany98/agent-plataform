@@ -1,0 +1,1 @@
+El esquema se gestiona con Alembic. En producción ejecute `alembic upgrade head` antes de iniciar Uvicorn.

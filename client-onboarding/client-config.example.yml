@@ -1,0 +1,35 @@
+# Configuración Blanca de Cliente - Plataforma de Agentes IA
+client:
+  client_id: "cliente-piloto-demo"
+  company_name: "Empresa Piloto España S.L."
+  tax_id: "B-12345678"
+  brand_name: "Agente Comercial IA"
+  domain: "piloto.empresa.local"
+  primary_color: "#0284c7"
+  language: "es"
+  timezone: "Europe/Madrid"
+  country: "ES"
+  currency: "EUR"
+
+taxes:
+  standard_vat: 0.21
+  reduced_vat: 0.10
+  super_reduced_vat: 0.04
+  is_tax_exempt: false
+
+document_series:
+  invoice_prefix: "INV-2026-"
+  quote_prefix: "PRE-2026-"
+  order_prefix: "PED-2026-"
+
+pilot_safeguards:
+  pilot_mode: true
+  progressive_phase: "FASE_D_VENTA_ASISTIDA"
+  max_monthly_budget_usd: 50.0
+  require_invoice_approval: true
+  require_discount_approval: true
+  high_value_order_threshold: 500.0
+
+support:
+  technical_contact: "admin@empresa.com"
+  emergency_phone: "+34 900 111 222"

@@ -1,0 +1,5 @@
+id,name,discount_percentage
+PL-STD,Tarifa Estándar,0.0
+PL-VIP,Tarifa Clientes VIP,10.0
+PL-DIST,Tarifa Distribuidores,15.0
+PL-EXPORT,Tarifa Exportación,0.0
