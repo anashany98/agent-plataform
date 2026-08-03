@@ -197,6 +197,7 @@ class LLMRouterService:
         correlation_id: str = "internal",
         agent_id: str = "default_agent",
         user_id: Optional[str] = None,
+        allowed_tools: Optional[list[str]] = None,
     ) -> Dict[str, Any]:
         if not prompt.strip():
             raise HTTPException(status_code=422, detail="El mensaje no puede estar vacío")
@@ -262,7 +263,15 @@ class LLMRouterService:
             )
             selected_rate = self._pricing_for(result.provider, result.model)
         if result is None:
-            self._audit_failure(correlation_id, agent_id, user_id, profile, errors, (time.perf_counter() - start) * 1000)
+            self._audit_failure(
+                correlation_id,
+                agent_id,
+                user_id,
+                profile,
+                errors,
+                (time.perf_counter() - start) * 1000,
+                allowed_tools=allowed_tools,
+            )
             if budget_blocked:
                 raise HTTPException(status_code=429, detail="Límite diario de gasto de IA alcanzado")
             raise HTTPException(status_code=503, detail={"message": "Ningún proveedor de IA está disponible", "errors": errors})
@@ -342,6 +351,8 @@ class LLMRouterService:
                 "provider_usage": result.raw_usage,
                 "pricing_catalog_version": selected_rate.catalog_version,
                 "reserved_ceiling_usd": float(reserved_ceiling),
+                "tool_policy": "deny-by-default",
+                "authorized_tools": sorted(allowed_tools or []),
             },
         )
         self.db.add(audit)
@@ -361,7 +372,16 @@ class LLMRouterService:
             "estimated_cost_usd": float(cost),
         }
 
-    def _audit_failure(self, correlation_id: str, agent_id: str, user_id: str | None, profile: str, errors: list[str], latency: float) -> None:
+    def _audit_failure(
+        self,
+        correlation_id: str,
+        agent_id: str,
+        user_id: str | None,
+        profile: str,
+        errors: list[str],
+        latency: float,
+        allowed_tools: Optional[list[str]] = None,
+    ) -> None:
         self.db.add(
             AuditLog(
                 correlation_id=correlation_id,
@@ -372,7 +392,12 @@ class LLMRouterService:
                 model_name="none",
                 status="error",
                 latency_ms=round(latency, 2),
-                details={"profile": profile, "errors": errors},
+                details={
+                    "profile": profile,
+                    "errors": errors,
+                    "tool_policy": "deny-by-default",
+                    "authorized_tools": sorted(allowed_tools or []),
+                },
             )
         )
         self.db.commit()

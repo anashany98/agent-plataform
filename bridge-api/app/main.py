@@ -55,6 +55,14 @@ from app.services.import_service import ImportService, ImportValidationError, pa
 from app.services.llm_router import LLMRouterService
 from app.services.prestashop_adapter import PrestaShopAdapter, PrestaShopIntegrationError
 from app.services.rag_service import RAGError, RAGService
+from app.services.tool_policy import (
+    TOOL_POLICY_DENY_BY_DEFAULT,
+    ToolArgumentError,
+    ToolExecutor,
+    ToolPolicyError,
+    authorized_tools_for,
+    known_tool_names,
+)
 
 settings.validate_runtime_security()
 
@@ -112,6 +120,12 @@ class AgentRunRequest(BaseModel):
     profile: str = "standard"
     user_id: Optional[str] = None
     conversation_id: Optional[str] = None
+
+
+class ToolInvokeRequest(BaseModel):
+    agent_id: str = Field(min_length=1, max_length=150)
+    tool: str = Field(min_length=1, max_length=150)
+    arguments: Dict[str, Any] = Field(default_factory=dict, max_length=32)
 
 
 class ApprovalDecision(BaseModel):
@@ -1147,14 +1161,65 @@ async def run_agent(req: AgentRunRequest, principal: Principal = Depends(require
     agent = AGENT_REGISTRY.get(req.agent_id)
     if not agent or agent.get("status") != "active":
         raise HTTPException(status_code=404, detail="Agente no disponible")
-    return await LLMRouterService(db).generate_response(
+    authorized = authorized_tools_for(agent)
+    tool_policy_note = (
+        " Política de herramientas deny-by-default: las herramientas autorizadas solo se ejecutan"
+        " a través del endpoint gobernado /agents/tools/invoke; el texto de tu respuesta nunca"
+        " ejecuta herramientas ni concede permisos."
+    )
+    response = await LLMRouterService(db).generate_response(
         prompt=req.prompt,
         profile=req.profile,
-        system_prompt=agent["prompt"],
+        system_prompt=agent["prompt"] + tool_policy_note,
         agent_id=req.agent_id,
         user_id=principal.user_id,
         correlation_id=req.conversation_id or str(uuid.uuid4()),
+        allowed_tools=authorized,
     )
+    response["available_tools"] = authorized
+    response["tool_policy"] = TOOL_POLICY_DENY_BY_DEFAULT
+    return response
+
+
+@app.get("/agents/{agent_id}/tools", tags=["Agentes"])
+def get_agent_tools(
+    agent_id: str,
+    _: Principal = Depends(require_roles(*READ_ROLES)),
+):
+    agent = AGENT_REGISTRY.get(agent_id)
+    if not agent or agent.get("status") != "active":
+        raise HTTPException(status_code=404, detail="Agente no disponible")
+    return {
+        "agent_id": agent_id,
+        "policy": TOOL_POLICY_DENY_BY_DEFAULT,
+        "authorized_tools": authorized_tools_for(agent),
+        "known_tools": known_tool_names(),
+    }
+
+
+@app.post("/agents/tools/invoke", tags=["Agentes"])
+async def invoke_agent_tool(
+    req: ToolInvokeRequest,
+    principal: Principal = Depends(require_roles(*OPERATOR_ROLES)),
+    db: Session = Depends(get_db),
+):
+    agent = AGENT_REGISTRY.get(req.agent_id)
+    if not agent or agent.get("status") != "active":
+        raise HTTPException(status_code=404, detail="Agente no disponible")
+    executor = ToolExecutor(db, principal, agent)
+    try:
+        result = await executor.invoke(req.tool, req.arguments)
+    except ToolPolicyError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ToolArgumentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {
+        "agent_id": req.agent_id,
+        "tool": req.tool,
+        "policy": TOOL_POLICY_DENY_BY_DEFAULT,
+        "status": "success",
+        "result": result,
+    }
 
 
 @app.get("/approvals", tags=["Aprobaciones"])
