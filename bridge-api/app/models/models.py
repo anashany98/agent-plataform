@@ -664,6 +664,30 @@ def enforce_installation_on_flush(session, _flush_context, _instances) -> None:
             sa_inspect(instance).identity_token = current_installation_id
 
 
+class InstallationLifecycle(Base):
+    """Estado de ciclo de vida de una instalación (export, erase, legal hold).
+
+    Una sola fila por ``installation_id`` controla la solicitud de borrado
+    y el estado de legal hold. El borrado se ejecuta cuando ``erase_after``
+    <= ahora o inmediatamente cuando se solicita con ``retention_days=0``.
+    El registro se recrea al recibir un nuevo evento de ciclo de vida.
+    """
+
+    __tablename__ = "installation_lifecycle"
+    installation_id = Column(String(128), primary_key=True)
+    legal_hold = Column(Boolean, nullable=False, default=False)
+    legal_hold_reason = Column(Text, nullable=True)
+    legal_hold_by = Column(String(255), nullable=True)
+    legal_hold_at = Column(DateTime, nullable=True)
+    erase_requested_at = Column(DateTime, nullable=True)
+    erase_requested_by = Column(String(255), nullable=True)
+    erase_reason = Column(Text, nullable=True)
+    erase_after = Column(DateTime, nullable=True)
+    erase_executed_at = Column(DateTime, nullable=True)
+    last_export_at = Column(DateTime, nullable=True)
+    updated_at = Column(DateTime, default=utcnow, nullable=False)
+
+
 def _validate_bulk_installation_parameters(parameters, current_installation_id: str) -> None:
     if parameters is None:
         return

@@ -122,6 +122,9 @@ class Settings(BaseSettings):
     RAG_UPLOAD_DIR: str = os.getenv("RAG_UPLOAD_DIR", "/data/uploads")
     RAG_ALLOWED_ROOTS: str = os.getenv("RAG_ALLOWED_ROOTS", "/data/uploads")
     OCR_ENABLED: bool = _bool("OCR_ENABLED", "true")
+    # D-029: retención por defecto (días) antes de ejecutar un erase solicitado.
+    LIFECYCLE_DEFAULT_RETENTION_DAYS: int = int(os.getenv("LIFECYCLE_DEFAULT_RETENTION_DAYS", "30"))
+    LIFECYCLE_MAX_RETENTION_DAYS: int = int(os.getenv("LIFECYCLE_MAX_RETENTION_DAYS", "365"))
 
     COUNTRY: str = os.getenv("COUNTRY", "ES")
     CURRENCY: str = os.getenv("CURRENCY", "EUR")

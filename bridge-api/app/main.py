@@ -53,6 +53,7 @@ from app.services.chatwoot_adapter import ChatwootAdapter, ChatwootIntegrationEr
 from app.services.deterministic_tools import BusinessRuleError, DeterministicToolsService, InsufficientStockError
 from app.services.ghl_adapter import GHLAdapter, GHLIntegrationError
 from app.services.import_service import ImportService, ImportValidationError, parse_import_file
+from app.services.lifecycle import LegalHoldActive, LifecycleError, LifecycleService
 from app.services.llm_router import LLMRouterService
 from app.services.outbox import OutboxPermanentError, OutboxService, OutboxTransientError
 from app.services.prestashop_adapter import PrestaShopAdapter, PrestaShopIntegrationError
@@ -102,12 +103,7 @@ app.add_middleware(
 async def _observability_middleware(request, call_next):  # noqa: ANN001
     """Propaga correlación, tenant y usuario; emite access log estructurado."""
 
-    from app.services import observability
     from app.services.observability import (
-        CORRELATION_ID,
-        REQUEST_ID,
-        TENANT_ID,
-        USER_ID,
         HTTP_LATENCY,
         HTTP_REQUESTS,
         log_event,
@@ -1518,6 +1514,89 @@ def delete_rag_document(doc_id: str, _: Principal = Depends(require_roles(*ADMIN
     if not RAGService(db).delete_document(doc_id):
         raise HTTPException(status_code=404, detail="Documento no encontrado")
     return {"status": "deleted", "doc_id": doc_id}
+
+
+# ---------------------------------------------------------------------------
+# D-029: Ciclo de vida por instalación (export, erase, retención, legal hold)
+# ---------------------------------------------------------------------------
+
+class LifecycleEraseRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+    retention_days: int = Field(default=0, ge=0, le=settings.LIFECYCLE_MAX_RETENTION_DAYS)
+
+
+class LifecycleLegalHoldRequest(BaseModel):
+    active: bool
+    reason: str = Field(min_length=1, max_length=500)
+
+
+@app.get("/lifecycle/status", tags=["Ciclo de vida"])
+def lifecycle_status(
+    principal: Principal = Depends(require_roles(*ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+
+    return LifecycleService(db, installation_id=principal.installation_id).get_state()
+
+
+@app.post("/lifecycle/export", tags=["Ciclo de vida"])
+def lifecycle_export(
+    principal: Principal = Depends(require_roles(*ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+
+    export = LifecycleService(
+        db, installation_id=principal.installation_id
+    ).export_installation(actor=principal.username)
+    return export
+
+
+@app.post("/lifecycle/erase", tags=["Ciclo de vida"])
+def lifecycle_erase(
+    req: LifecycleEraseRequest,
+    principal: Principal = Depends(require_roles(*ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+
+    try:
+        return LifecycleService(
+            db, installation_id=principal.installation_id
+        ).request_erase(
+            actor=principal.username,
+            reason=req.reason,
+            retention_days=req.retention_days,
+        )
+    except LegalHoldActive as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LifecycleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/lifecycle/legal-hold", tags=["Ciclo de vida"])
+def lifecycle_legal_hold(
+    req: LifecycleLegalHoldRequest,
+    principal: Principal = Depends(require_roles(*ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+
+    return LifecycleService(
+        db, installation_id=principal.installation_id
+    ).set_legal_hold(active=req.active, actor=principal.username, reason=req.reason)
+
+
+@app.post("/lifecycle/process-due-erases", tags=["Ciclo de vida"])
+def lifecycle_process_due_erases(
+    principal: Principal = Depends(require_roles(*ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+
+    # El proceso se ejecuta para todas las instalaciones en estado de
+    # retención vencida; el admin que invoca el endpoint queda registrado.
+    # ``LifecycleService`` se construye con la instalación activa para
+    # usar su sesión, pero ``process_due_erases`` itera todas las
+    # instalaciones pendientes del lote.
+    service = LifecycleService(db, installation_id=principal.installation_id)
+    return {"processed": service.process_due_erases(actor=principal.username)}
 
 
 @app.get("/tools/products", tags=["Herramientas"])
