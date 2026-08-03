@@ -112,15 +112,24 @@ Acción de entorno autorizada por el propietario (`DECISIONS.md` D-008): el 2026
 | 2026-08-03 | D-017 `7fb4f45`: Pillow fijado en `>=12,<13` (49 CVEs cerrados en 10.x/11.x), pypdf en `>=6,<7` (CVE de 5.9), Vite `^7` (esbuild path traversal cerrado); script `scripts/audit_dependencies.py` ejecuta `pip-audit` + `npm audit --omit=dev` y bloquea si high/critical >0 | 6 evals passed (rangos Pillow/pypdf/Vite, npm audit prod, pip-audit, ejecución del script) | `pip-audit` y `npm audit --omit=dev` reportan 0 vulnerabilidades; el corpus rechaza cualquier rango permisivo con versiones vulnerables; Vite ^7 + portal typecheck + build verde |
 | 2026-08-03 | Corpus combinado tras D-017, env limpio, orden `tests bridge-api/tests` | 212 passed; 59,91 s | Regresión completa verde con los evals de auditoría |
 | 2026-08-03 | Corpus combinado tras D-017, env limpio, orden inverso `bridge-api/tests tests` | 212 passed; 60,44 s | Sin dependencia del orden de colección |
-| 2026-08-03 | Ruff focalizado `E9,F,I` + archivos nuevos al completo | Verde | Deuda de estilo histórica de `main.py` permanece registrada (D-030); `ghl_adapter.py`, `rag_security.py` y `audit_dependencies.py` limpios al completo |
+| 2026-08-03 | D-028 `af53b8b`: middleware FastAPI con logs JSON correlacionados (correlation_id, request_id, tenant_id, user_id, route, method, status, latency_ms), contextvars por proceso con restauración robusta, redacción determinista por clave y valor, métricas Prometheus para HTTP/outbox/breaker/RAG/alertas y reglas in-memory integradas en `/metrics` | 10 evals passed (correlación generada y propagada, ausencia de secretos en logs bajo fault injection, log_event redacta por clave y valor, breaker abierto dispara alerta, DLQ dispara alerta, `/metrics` expone breakers+alertas, registry de reglas, access log estructurado, redacción de tipos documentados) | Cada request queda trazado y correlacionado sin filtrar secretos; un breaker abierto o un mensaje en DLQ dispara alerta verificable sin PII |
+| 2026-08-03 | Corpus combinado tras D-028, env limpio, orden `tests bridge-api/tests` | 222 passed; 61,72 s | Regresión completa verde con los evals de observabilidad |
+| 2026-08-03 | Corpus combinado tras D-028, env limpio, orden inverso `bridge-api/tests tests` | 222 passed; 62,74 s | Sin dependencia del orden de colección |
+| 2026-08-03 | D-029 `ff0eed8`: `LifecycleService` con export JSON portable de datos operativos (sin users ni AuditLog), erase con retención configurable e inmediata, proceso de borrados vencidos y legal hold que bloquea cualquier erase; borrado en orden FK con eliminación de archivos RAG; modelo `InstallationLifecycle` + migración aditiva `0005`; endpoints `/lifecycle/*` con `ADMIN_ROLES` | 6 evals passed (export completo sin credenciales ni AuditLog, export vacío, erase inmediato preserva AuditLog y elimina archivo RAG, retención con vencimiento y proceso de borrados vencidos, legal hold bloquea solicitud y borrado vencido con auditoría, aislamiento entre instalaciones) | El fixture completo se exporta y se elimina de DB y disco; el AuditLog y usuarios sobreviven; la retención conserva los datos hasta el vencimiento; el legal hold bloquea solicitud y borrado vencido; una instalación no toca los datos de otra |
+| 2026-08-03 | Corpus combinado tras D-029, env limpio, orden `tests bridge-api/tests` | 228 passed; 69,32 s | Regresión completa verde con los evals de lifecycle |
+| 2026-08-03 | Corpus combinado tras D-029, env limpio, orden inverso `bridge-api/tests tests` | 228 passed; 60,63 s | Sin dependencia del orden de colección |
+| 2026-08-03 | Migraciones herméticas actualizadas a head `0005` | 23 passed | Clean, histórica, downgrade/reupgrade y reserva activa conservadas con la tabla `installation_lifecycle` |
+| 2026-08-03 | Ruff focalizado `E9,F,I` + archivos nuevos al completo | Verde | Deuda de estilo histórica de `main.py` permanece registrada (D-030); `ghl_adapter.py`, `rag_security.py`, `audit_dependencies.py`, `observability.py` y `lifecycle.py` limpios al completo; imports muertos del middleware D-028 eliminados en `ff0eed8` |
 
-El conteo coincide con el corpus documentado: 189 tests en `tests/` + 23 en `bridge-api/tests` = 212. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
+El conteo coincide con el corpus documentado: 205 tests en `tests/` + 23 en `bridge-api/tests` = 228. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
 
 ## Próxima evidencia obligatoria — P1 restante de Fase 2
 
 1. Contrato live del endpoint de búsqueda/reconciliación GHL pendiente de sandbox (B-004); la microventana efecto→checkpoint ya está cerrada por reconciliación (D-010, `ce2723c`), el crash ambiguo bridge-side verificado (D-035, `5a3edf8`) y el outbox/DLQ con circuit breakers también (`3733bad`).
 2. Sandbox del proveedor RAG real (B-006) y dataset de exfiltración a escala real; la clasificación/DLP y el corpus anti prompt injection ya están verificados (D-020, `0541650`).
 3. SBOM y hashes pin a pin por release; las dependencias están verificadas (D-017, `7fb4f45`).
-4. Egress, proxy, Chatwoot, perfiles, límites y observabilidad verificados en runtime seguro.
-5. Backup/restore en instalación vacía y release/rollback trazable.
-6. Licencias y pruebas E2E/UI.
+4. OTel/Prometheus scrape y SLO formales en runtime; la instrumentación, alertas y redacción de secretos están verificadas (D-028, `af53b8b`).
+5. Revisión legal de la política de retención (B-008); el export/erase con retención y legal hold está verificado (D-029, `ff0eed8`); la inclusión de backups en el borrado queda para D-015.
+6. Egress, proxy, Chatwoot, perfiles y límites verificados en runtime seguro.
+7. Backup/restore en instalación vacía y release/rollback trazable.
+8. Licencias y pruebas E2E/UI.
