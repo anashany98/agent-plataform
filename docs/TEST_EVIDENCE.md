@@ -109,14 +109,18 @@ Acción de entorno autorizada por el propietario (`DECISIONS.md` D-008): el 2026
 | 2026-08-03 | D-020 `0541650`: clasificación RAG public/internal/confidential/restricted con ACL deny-by-default, DLP determinista en ingesta (DNI/NIE con letra, tarjeta con Luhn, IBAN ES mod-97, JWT, AWS, sk_live, claves privadas) que eleva la clasificación a confidential sin persistir valores, redacción de secretos en respuesta y citas, rechazo de consultas con patrones de inyección y marcado `trusted=false` del contenido recuperado | 10 evals passed (matriz de clasificación, DLP types-only, checksums inválidos, internal invisible al chat público, confidential/restricted, ingest rechazo de clasificación desconocida, DLP eleva y redacta, exfiltración y aislamiento entre instalaciones) | Las consultas de inyección/exfiltración no devuelven contenido confidencial; los secretos detectados en ingesta suben la clasificación sin guardarse en metadatos y se redactan en respuesta y citas; el chat público nunca ve documentos internal |
 | 2026-08-03 | Corpus combinado tras D-020, env limpio, orden `tests bridge-api/tests` | 206 passed; 14,60 s | Regresión completa verde con los evals de RAG seguro |
 | 2026-08-03 | Corpus combinado tras D-020, env limpio, orden inverso `bridge-api/tests tests` | 206 passed; 15,89 s | Sin dependencia del orden de colección |
-| 2026-08-03 | Ruff focalizado `E9,F,I` + archivos nuevos al completo | Verde | Deuda de estilo histórica de `main.py` permanece registrada (D-030); `ghl_adapter.py` y `rag_security.py` limpios al completo |
+| 2026-08-03 | D-017 `7fb4f45`: Pillow fijado en `>=12,<13` (49 CVEs cerrados en 10.x/11.x), pypdf en `>=6,<7` (CVE de 5.9), Vite `^7` (esbuild path traversal cerrado); script `scripts/audit_dependencies.py` ejecuta `pip-audit` + `npm audit --omit=dev` y bloquea si high/critical >0 | 6 evals passed (rangos Pillow/pypdf/Vite, npm audit prod, pip-audit, ejecución del script) | `pip-audit` y `npm audit --omit=dev` reportan 0 vulnerabilidades; el corpus rechaza cualquier rango permisivo con versiones vulnerables; Vite ^7 + portal typecheck + build verde |
+| 2026-08-03 | Corpus combinado tras D-017, env limpio, orden `tests bridge-api/tests` | 212 passed; 59,91 s | Regresión completa verde con los evals de auditoría |
+| 2026-08-03 | Corpus combinado tras D-017, env limpio, orden inverso `bridge-api/tests tests` | 212 passed; 60,44 s | Sin dependencia del orden de colección |
+| 2026-08-03 | Ruff focalizado `E9,F,I` + archivos nuevos al completo | Verde | Deuda de estilo histórica de `main.py` permanece registrada (D-030); `ghl_adapter.py`, `rag_security.py` y `audit_dependencies.py` limpios al completo |
 
-El conteo coincide con el corpus documentado: 183 tests en `tests/` + 23 en `bridge-api/tests` = 206. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
+El conteo coincide con el corpus documentado: 189 tests en `tests/` + 23 en `bridge-api/tests` = 212. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
 
 ## Próxima evidencia obligatoria — P1 restante de Fase 2
 
 1. Contrato live del endpoint de búsqueda/reconciliación GHL pendiente de sandbox (B-004); la microventana efecto→checkpoint ya está cerrada por reconciliación (D-010, `ce2723c`), el crash ambiguo bridge-side verificado (D-035, `5a3edf8`) y el outbox/DLQ con circuit breakers también (`3733bad`).
 2. Sandbox del proveedor RAG real (B-006) y dataset de exfiltración a escala real; la clasificación/DLP y el corpus anti prompt injection ya están verificados (D-020, `0541650`).
-3. Egress, proxy, Chatwoot, perfiles, límites y observabilidad verificados en runtime seguro.
-4. Backup/restore en instalación vacía y release/rollback trazable.
-5. Dependencias, SBOM, licencias y pruebas E2E/UI.
+3. SBOM y hashes pin a pin por release; las dependencias están verificadas (D-017, `7fb4f45`).
+4. Egress, proxy, Chatwoot, perfiles, límites y observabilidad verificados en runtime seguro.
+5. Backup/restore en instalación vacía y release/rollback trazable.
+6. Licencias y pruebas E2E/UI.
