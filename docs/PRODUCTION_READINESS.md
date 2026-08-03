@@ -14,6 +14,8 @@
 
 Los seis defectos P0 reproducidos están `VERIFIED` en la rama mediante 124 pruebas locales y PostgreSQL efímero real, incluido modo optimizado, concurrencia y ciclos de migración. Esto cierra el bloque P0 de implementación, pero no convierte la rama en candidata: permanecen 25 P1 y 5 P2 abiertos, no existe restore, build limpio/full stack, E2E crítico, validación UI, supply-chain/licencias ni release inmutable. Cuatro P1 nuevos fueron confirmados por revisión adversarial en PrestaShop, webhooks e importación.
 
+**Actualización 2026-08-03:** re-verificación en vivo del corpus; D-032 (harness no hermético) quedó `VERIFIED` en `4afd0c7` — el corpus combinado pasa 159/159 en ambos órdenes de colección con entorno limpio. Conteo actual: seis P0, siete P1 y dos P2 verificados; 22 defectos abiertos (19 P1, 3 P2). Stack antiguo del propietario detenido con volúmenes intactos (`DECISIONS.md` D-007/D-008); margen de RAM pendiente de medición (B-001 mitigado). La decisión no cambia.
+
 El runtime de la auditoría terminó detenido para proteger el host tras superar el 95 % de RAM durante el build. La recaptura de baseline confirma, mediante consultas de solo lectura, que los 14 contenedores siguen detenidos y los nueve volúmenes permanecen presentes; no se arrancó ningún servicio.
 
 ## Escala de estado

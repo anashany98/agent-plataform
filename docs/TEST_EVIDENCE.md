@@ -84,6 +84,20 @@ La evidencia cierra D-011, D-013, D-014, D-024, D-033, D-034 y D-036. D-010, D-0
 
 No se arrancó el full stack, no se usaron credenciales/datos reales y no se contactaron proveedores externos. Los contenedores PostgreSQL fueron efímeros, aislados, etiquetados y eliminados; no se tocó `agent-platform-fixed-bridge-db-1` ni ningún proyecto ajeno. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
 
+## Reverificación 2026-08-03 — corpus hermético (D-032) y entorno
+
+Acción de entorno autorizada por el propietario (`DECISIONS.md` D-008): el 2026-08-03 se detuvieron con `docker compose down` (sin `-v`) los compose projects del workspace antiguo `C:\Users\PC\Desktop\PROYECTOS\automatiazcion\agent-platform`: `agent-platform`, `agent-piloto-rc1` y `agent-cliente-demo-es-staging`. Volúmenes conservados; puerto 9000 liberado; la memoria de la VM Docker queda pendiente de liberación/medición.
+
+| Fecha | Control | Resultado | Alcance |
+|---|---|---|---|
+| 2026-08-03 | Corpus combinado `pytest tests bridge-api/tests`, env limpio, HEAD `637e512` | 2 failed / 157 passed | Reproducción de D-032: `tests/conftest.py:20` vacía `CHATWOOT_API_TOKEN` y contamina `bridge-api/tests/unit/test_demo_data_guards.py`; los unit tests heredaban el entorno del proceso |
+| 2026-08-03 | Fix `4afd0c7`: valores production-like explícitos (`CHATWOOT_API_TOKEN`, `CHATWOOT_HANDOFF_TEAM_ID`) en `_production_like_settings` | 1 archivo, +2 líneas | Los tests dejan de depender del entorno del operador |
+| 2026-08-03 | Corpus combinado, env limpio, orden `tests bridge-api/tests` | 159 passed; 14,45 s | D-032 VERIFIED: un único comando reproducible |
+| 2026-08-03 | Corpus combinado, env limpio, orden inverso `bridge-api/tests tests` | 159 passed; 15,80 s | Sin dependencia del orden de colección |
+| 2026-08-03 | Portal `npm run typecheck` | `tsc --noEmit` limpio | Re-ejecutado sobre el mismo tree |
+
+El conteo coincide con el corpus documentado: 136 tests en `tests/` + 23 en `bridge-api/tests`. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
+
 ## Próxima evidencia obligatoria — P1 restante de Fase 2
 
 1. Reconciliación/outbox/DLQ y fault injection de webhooks/GHL en cada frontera ambigua.

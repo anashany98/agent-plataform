@@ -1,11 +1,13 @@
 # Estado autoritativo del proyecto
 
-**Fecha:** 2026-08-02
+**Fecha:** 2026-08-03
 **Rama:** `production-remediation`
 **Recovery commit:** `ed77056`
 **Commit P0:** `de236e9`
 **Commit P1 de invariantes:** `48051e8`
-**Fase activa:** Fase 2 — corrección de P1 (P0 cerrados)
+**Commit harness hermético (D-032):** `4afd0c7`
+**Fase activa:** Fase 2 — Wave 1 de P1/P2 corregibles sin runtime (P0 cerrados)
+**Ruta aprobada:** Ruta A — candidata core con limitaciones documentadas (`DECISIONS.md` D-007)
 **Decisión:** **NOT PRODUCTION READY — CRITICAL RISK**
 
 ## Estado verificable
@@ -18,7 +20,9 @@
 - El corpus backend pasa 159 pruebas y las migraciones herméticas 23; las reproducciones rojas de Fase 1 se conservan como evidencia histórica previa a cada fix.
 - PostgreSQL 15 efímero verificó la revisión `0003`, 12 FKs compuestas `DEFERRABLE INITIALLY DEFERRED`, confirmación, aprobación CAS, presupuesto LLM, oversell, carreras de reservas, `python -O`, downgrade/reupgrade y adopción histórica; cada ensayo terminó sin filas ni contenedores residuales.
 - `48051e8` cerró seis P1 y un P2: aprobación CAS, Activepieces estricto, coste/presupuesto IA, paginación/visibilidad PrestaShop, importación atómica idempotente y health separado. Sumado al verificador PostgreSQL cerrado en `de236e9`, hay siete P1 verificados; Webhooks/GHL, RAG, resiliencia, perfil seguro y handoff conservan alcance parcial o live pendiente.
-- Permanecen 19 P1 y 4 P2 no verificados; no existe candidata de release ni evidencia E2E/live suficiente.
+- El 2026-08-03 se re-verificó el corpus en vivo: la corrida combinada reproducía 2 fallos por contaminación de entorno (D-032); tras `4afd0c7` el corpus combinado pasa 159/159 en ambos órdenes de colección con entorno limpio. D-032 queda VERIFIED (P2).
+- El 2026-08-03, con autorización del propietario, se detuvieron los tres compose projects del workspace antiguo (`agent-platform`, `agent-piloto-rc1`, `agent-cliente-demo-es-staging`); volúmenes intactos y puerto 9000 liberado. La memoria de la VM Docker queda pendiente de liberación/medición (B-001 mitigado).
+- Permanecen 19 P1 y 3 P2 no verificados; no existe candidata de release ni evidencia E2E/live suficiente.
 - El build del portal fue reproducido anteriormente; la UX dinámica permanece sin validar.
 
 ## Stop-ship abiertos tras el cierre P0
@@ -35,7 +39,7 @@
 |---|---|---|
 | 0 — Baseline | VERIFIED | Cuatro documentos completos; topología, estados, enlaces y Compose contrastados sin arrancar servicios |
 | 1 — Reproducción | VERIFIED | 19 tests rojos; registros de defectos/riesgos/evidencia; 32 defectos contrastados |
-| 2 — P0/P1 | IN PROGRESS | Seis P0 y siete P1 `VERIFIED`; quedan 19 P1 no verificados, varios con remediación parcial |
+| 2 — P0/P1 | IN PROGRESS | Seis P0, siete P1 y dos P2 `VERIFIED`; quedan 19 P1 y 3 P2 no verificados, varios con remediación parcial |
 | 3–29 | BLOCKED | Orden obligatorio; dependen de P0/P1 y core estable |
 | Release | BLOCKED | No se cumplen gates de producción |
 

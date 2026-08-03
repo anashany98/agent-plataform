@@ -20,6 +20,7 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 
 ### Changed
 
+- El propietario aprobó la Ruta A (candidata core con limitaciones documentadas) y la parada del stack antiguo, ejecutada el 2026-08-03: compose projects `agent-platform`, `agent-piloto-rc1` y `agent-cliente-demo-es-staging` detenidos con volúmenes intactos; puerto 9000 liberado.
 - El estado comercial queda fijado en `NOT PRODUCTION READY — CRITICAL RISK` hasta superar todos los gates.
 - Los resultados históricos se tratan como evidencia previa, no como verificación actual.
 - La Fase 0 queda cerrada con baseline de host/Git/Docker, inventario, dependencias, propiedad de datos y 30 criterios de readiness bloqueados.
@@ -30,6 +31,7 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 
 ### Fixed
 
+- Harness de tests hermético (D-032): los unit tests de guards usan valores production-like explícitos; el corpus combinado `pytest tests bridge-api/tests` pasa 159/159 en cualquier orden de colección y sin entorno del operador (`4afd0c7`).
 - Confirmación comercial exacta con token HMAC de 128 bits almacenado como SHA-256, caducidad, actor firmado y replay idempotente.
 - Reservas locales con TTL y transiciones atómicas de release/cancel/expire; stock externo no se confirma sin autoridad transaccional.
 - Downgrades destructivos sustituidos por migraciones explícitas, compatibles y no destructivas.
