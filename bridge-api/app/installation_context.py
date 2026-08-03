@@ -37,8 +37,16 @@ def installation_scope(installation_id: str) -> Iterator[str]:
     """Temporarily selects one installation and always restores the prior scope."""
 
     normalized = validate_installation_id(installation_id)
+    previous = _installation_override.get()
     token = _installation_override.set(normalized)
     try:
         yield normalized
     finally:
-        _installation_override.reset(token)
+        try:
+            _installation_override.reset(token)
+        except ValueError:
+            # El cleanup puede ejecutarse en un Context distinto (p. ej. el
+            # cierre de dependencias generador de FastAPI tras un error de la
+            # petición). Restaurar el valor anterior mantiene la semántica de
+            # ámbito sin convertir el error original en un 500.
+            _installation_override.set(previous)

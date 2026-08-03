@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import httpx
 
 from app.config import settings
+from app.services.resilience import CircuitOpenError, guarded_request_with_retry
 
 
 class PrestaShopIntegrationError(RuntimeError):
@@ -53,7 +54,10 @@ class PrestaShopAdapter:
                 follow_redirects=False,
                 headers={"Accept": "application/json"},
             ) as client:
-                response = await client.get(f"{self.base_url}/api/{resource}", params=request_params)
+                response = await guarded_request_with_retry(
+                    "prestashop",
+                    lambda: client.get(f"{self.base_url}/api/{resource}", params=request_params),
+                )
                 response.raise_for_status()
                 payload = response.json()
                 if not isinstance(payload, dict):
@@ -61,6 +65,10 @@ class PrestaShopAdapter:
                 return payload
         except PrestaShopIntegrationError:
             raise
+        except CircuitOpenError as exc:
+            raise PrestaShopIntegrationError(
+                f"Circuito hacia PrestaShop abierto; la llamada se rechazó sin tocar la red: {exc}"
+            ) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise PrestaShopIntegrationError(f"Error de PrestaShop: {exc}") from exc
 

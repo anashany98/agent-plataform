@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 import httpx
 
 from app.config import settings
-from app.services.http_retry import request_with_retry
+from app.services.resilience import CircuitOpenError, guarded_request_with_retry
 
 
 class GHLIntegrationError(RuntimeError):
@@ -32,16 +32,21 @@ class GHLAdapter:
     async def _request(self, method: str, path: str, **kwargs: Any) -> Dict[str, Any]:
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
-                response = await request_with_retry(
+                response = await guarded_request_with_retry(
+                    "ghl",
                     lambda: client.request(
                         method,
                         f"{self.base_url}{path}",
                         headers=self._headers(),
                         **kwargs,
-                    )
+                    ),
                 )
                 response.raise_for_status()
                 return response.json() if response.content else {}
+        except CircuitOpenError as exc:
+            raise GHLIntegrationError(
+                f"Circuito hacia GHL abierto; la llamada se rechazó sin tocar la red: {exc}"
+            ) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise GHLIntegrationError(f"Error de GHL: {exc}") from exc
 

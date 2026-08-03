@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import or_, text, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import settings
@@ -28,6 +28,7 @@ from app.models.models import (
     IdempotencyRecord,
     InvoiceDraft,
     Order,
+    OutboxMessage,
     Pricelist,
     Product,
     Quote,
@@ -53,8 +54,10 @@ from app.services.deterministic_tools import BusinessRuleError, DeterministicToo
 from app.services.ghl_adapter import GHLAdapter, GHLIntegrationError
 from app.services.import_service import ImportService, ImportValidationError, parse_import_file
 from app.services.llm_router import LLMRouterService
+from app.services.outbox import OutboxPermanentError, OutboxService, OutboxTransientError
 from app.services.prestashop_adapter import PrestaShopAdapter, PrestaShopIntegrationError
 from app.services.rag_service import RAGError, RAGService
+from app.services.resilience import CircuitOpenError, all_breaker_states
 from app.services.tool_policy import (
     TOOL_POLICY_DENY_BY_DEFAULT,
     ToolArgumentError,
@@ -719,7 +722,96 @@ def get_metrics(_: Principal = Depends(require_roles(*ADMIN_ROLES)), db: Session
         "audit_logs_count": db.query(AuditLog).count(),
         "total_approvals": db.query(ApprovalRequest).count(),
         "pending_approvals": db.query(ApprovalRequest).filter(ApprovalRequest.status == "pending").count(),
+        "outbox": OutboxService(db).counts(),
+        "circuit_breakers": all_breaker_states(),
     }
+
+
+GHL_LEAD_OUTBOX_TOPIC = "ghl.lead_capture"
+
+
+def _commit_ghl_checkpoint(
+    message: OutboxMessage, payload: Dict[str, Any], checkpoint: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Persiste el checkpoint del dispatcher con diccionarios nuevos.
+
+    La columna JSON solo detecta cambios comparando con el último valor
+    commitado; mutar in-place el mismo objeto ya persistido haría que la
+    comparación dé igualdad y el commit se saltaría la actualización.
+    """
+
+    new_checkpoint = dict(checkpoint)
+    message.payload = {**payload, "checkpoint": dict(new_checkpoint)}
+    db = object_session(message)
+    if db is not None:
+        db.commit()
+    return new_checkpoint
+
+
+async def _dispatch_ghl_lead_capture(message: OutboxMessage) -> Dict[str, Any]:
+    """Captura un lead en GHL con checkpoints durables en el outbox.
+
+    Cada efecto externo se checkpointea en ``message.payload`` antes de pasar
+    al siguiente, de modo que un crash repite como mucho el último paso no
+    confirmado. La deduplicación en el propio proveedor queda bloqueada en
+    D-010 hasta que GHL acepte claves de idempotencia verificables.
+    """
+
+    db = object_session(message)
+    if db is None:
+        raise OutboxTransientError("El mensaje de outbox no tiene sesión activa")
+    payload = dict(message.payload or {})
+    checkpoint = dict(payload.get("checkpoint") or {})
+    contact_id = str(checkpoint.get("contact_id") or "")
+    try:
+        if not ghl_adapter.configured():
+            raise OutboxPermanentError("GHL no está configurado")
+        email = str(payload.get("email") or "").strip()
+        if not email or email.endswith("@invalid.local"):
+            raise OutboxPermanentError("El lead no tiene datos de contacto válidos")
+        if not contact_id:
+            contact_response = await ghl_adapter.upsert_contact(
+                email=email,
+                first_name=str(payload.get("first_name") or ""),
+                phone=payload.get("phone"),
+                company_name=payload.get("company_name"),
+            )
+            contact = contact_response.get("contact") or contact_response
+            contact_id = str(contact.get("id") or "")
+            if not contact_id:
+                raise GHLIntegrationError("GHL no devolvió un ID de contacto")
+            checkpoint = _commit_ghl_checkpoint(
+                message, payload, {**checkpoint, "contact_id": contact_id}
+            )
+        if not checkpoint.get("opportunity"):
+            opportunity = await ghl_adapter.create_opportunity(
+                contact_id=contact_id,
+                name=str(payload.get("opportunity_name") or ""),
+                monetary_value=float(payload.get("monetary_value") or 0.0),
+                external_id=str(payload.get("external_id") or ""),
+            )
+            checkpoint = _commit_ghl_checkpoint(
+                message, payload, {**checkpoint, "opportunity": opportunity}
+            )
+        if payload.get("note") and not checkpoint.get("note_completed"):
+            await ghl_adapter.add_note(contact_id, str(payload["note"]))
+            checkpoint = _commit_ghl_checkpoint(
+                message, payload, {**checkpoint, "note_completed": True}
+            )
+    except OutboxPermanentError:
+        raise
+    except (GHLIntegrationError, CircuitOpenError) as exc:
+        raise OutboxTransientError(str(exc)) from exc
+    return {
+        "status": "success",
+        "contact_id": contact_id,
+        "opportunity": checkpoint.get("opportunity"),
+    }
+
+
+OUTBOX_DISPATCHERS: Dict[str, Any] = {
+    GHL_LEAD_OUTBOX_TOPIC: _dispatch_ghl_lead_capture,
+}
 
 
 async def _capture_ghl_opportunity(db: Session, customer: Customer, quote: Dict[str, Any]) -> Dict[str, Any]:
@@ -731,28 +823,32 @@ async def _capture_ghl_opportunity(db: Session, customer: Customer, quote: Dict[
     existing = db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == key).first()
     if existing and existing.status_code == 200:
         return {"status": "duplicate_ignored", "result": existing.response_body}
-    try:
-        contact_response = await ghl_adapter.upsert_contact(
-            email=customer.email,
-            first_name=customer.name,
-            phone=customer.phone,
-            company_name=customer.company,
-        )
-        contact = contact_response.get("contact") or contact_response
-        contact_id = str(contact.get("id") or "")
-        if not contact_id:
-            raise GHLIntegrationError("GHL no devolvió un ID de contacto")
-        opportunity = await ghl_adapter.create_opportunity(
-            contact_id=contact_id,
-            name=f"Presupuesto {quote['quote_id']}",
-            monetary_value=float(quote["grand_total"]),
-            external_id=quote["quote_id"],
-        )
-        await ghl_adapter.add_note(
-            contact_id,
-            f"Oportunidad creada desde conversación. Presupuesto {quote['quote_id']} por {quote['grand_total']:.2f} {quote['currency']}.",
-        )
-        result = {"status": "success", "contact_id": contact_id, "opportunity": opportunity}
+    payload = {
+        "email": customer.email,
+        "first_name": customer.name,
+        "phone": customer.phone,
+        "company_name": customer.company,
+        "quote_id": quote["quote_id"],
+        "opportunity_name": f"Presupuesto {quote['quote_id']}",
+        "monetary_value": float(quote["grand_total"]),
+        "currency": quote["currency"],
+        "external_id": quote["quote_id"],
+        "note": (
+            f"Oportunidad creada desde conversación. Presupuesto {quote['quote_id']} "
+            f"por {quote['grand_total']:.2f} {quote['currency']}."
+        ),
+    }
+    outbox = OutboxService(db)
+    message, created = outbox.enqueue(
+        topic=GHL_LEAD_OUTBOX_TOPIC,
+        idempotency_key=key,
+        payload=payload,
+    )
+    if message.state == "sent":
+        return {"status": "duplicate_ignored", "result": message.response_body}
+    await outbox.deliver(message, _dispatch_ghl_lead_capture)
+    if message.state == "sent":
+        result = {"status": "success", **(message.response_body or {})}
         if existing:
             existing.response_body = result
             existing.status_code = 200
@@ -760,14 +856,25 @@ async def _capture_ghl_opportunity(db: Session, customer: Customer, quote: Dict[
             db.add(IdempotencyRecord(idempotency_key=key, response_body=result, status_code=200))
         db.commit()
         return result
-    except GHLIntegrationError as exc:
-        _audit(
-            db,
-            event_type="ghl_lead",
-            status_value="error",
-            details={"quote_id": quote["quote_id"], "error": str(exc)},
-        )
-        return {"status": "failed", "error": str(exc)}
+    _audit(
+        db,
+        event_type="ghl_lead",
+        status_value="queued_for_retry",
+        details={
+            "quote_id": quote["quote_id"],
+            "outbox_id": message.id,
+            "created": created,
+            "attempt_count": message.attempt_count,
+            "error": message.last_error,
+        },
+    )
+    return {
+        "status": "queued_for_retry",
+        "outbox_id": message.id,
+        "created": created,
+        "attempt_count": message.attempt_count,
+        "next_attempt_at": message.next_attempt_at.isoformat() if message.next_attempt_at else None,
+    }
 
 
 @app.post("/webhooks/chatwoot", tags=["Webhooks"])
@@ -1064,6 +1171,85 @@ def receive_activepieces_webhook(
     db.add(audit)
     db.commit()
     return {"status": "processed", "source": "activepieces", "execution_id": audit.id}
+
+
+@app.get("/outbox", tags=["Resiliencia"])
+def list_outbox(
+    state: Optional[str] = Query(default=None),
+    topic: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    _: Principal = Depends(require_roles(*ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    if state is not None and state not in {"pending", "processing", "sent", "dead"}:
+        raise HTTPException(status_code=422, detail="Estado de outbox desconocido")
+    query = db.query(OutboxMessage)
+    if state:
+        query = query.filter(OutboxMessage.state == state)
+    if topic:
+        query = query.filter(OutboxMessage.topic == topic)
+    messages = query.order_by(OutboxMessage.created_at.desc()).limit(limit).all()
+    return {
+        "items": [
+            {
+                "id": message.id,
+                "topic": message.topic,
+                "idempotency_key": message.idempotency_key,
+                "state": message.state,
+                "attempt_count": message.attempt_count,
+                "max_attempts": message.max_attempts,
+                "next_attempt_at": message.next_attempt_at.isoformat() if message.next_attempt_at else None,
+                "created_at": message.created_at.isoformat() if message.created_at else None,
+                "sent_at": message.sent_at.isoformat() if message.sent_at else None,
+                "last_error": message.last_error,
+            }
+            for message in messages
+        ],
+        "counts": OutboxService(db).counts(),
+    }
+
+
+@app.post("/outbox/process", tags=["Resiliencia"])
+async def process_outbox(
+    principal: Principal = Depends(require_roles(*OPERATOR_ROLES)),
+    db: Session = Depends(get_db),
+):
+    summary = await OutboxService(db).process_due(dispatchers=OUTBOX_DISPATCHERS)
+    _audit(
+        db,
+        event_type="outbox_process",
+        status_value="success",
+        details=summary,
+        principal=principal,
+    )
+    return {"status": "processed", **summary, "circuit_breakers": all_breaker_states()}
+
+
+@app.post("/outbox/{message_id}/retry", tags=["Resiliencia"])
+def retry_outbox_message(
+    message_id: str,
+    principal: Principal = Depends(require_roles(*ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    try:
+        message = OutboxService(db).retry_dead(message_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _audit(
+        db,
+        event_type="outbox_manual_retry",
+        status_value="success",
+        details={"outbox_id": message.id, "topic": message.topic},
+        principal=principal,
+    )
+    return {
+        "status": "requeued",
+        "outbox_id": message.id,
+        "topic": message.topic,
+        "next_attempt_at": message.next_attempt_at.isoformat() if message.next_attempt_at else None,
+    }
 
 
 @app.post("/rag/ingest", tags=["Documentos"])

@@ -3,7 +3,7 @@ from typing import Any, Dict
 import httpx
 
 from app.config import settings
-from app.services.http_retry import request_with_retry
+from app.services.resilience import CircuitOpenError, guarded_request_with_retry
 
 
 class ActivepiecesIntegrationError(RuntimeError):
@@ -23,12 +23,13 @@ class ActivepiecesAdapter:
             headers["Authorization"] = f"Bearer {self.api_key}"
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
-                response = await request_with_retry(
+                response = await guarded_request_with_retry(
+                    "activepieces",
                     lambda: client.post(
                         f"{self.base_url}{webhook_path}",
                         json=payload,
                         headers=headers,
-                    )
+                    ),
                 )
                 response.raise_for_status()
                 data = response.json() if response.content else {}
@@ -44,5 +45,9 @@ class ActivepiecesAdapter:
                 return data
         except ActivepiecesIntegrationError:
             raise
+        except CircuitOpenError as exc:
+            raise ActivepiecesIntegrationError(
+                f"Circuito hacia Activepieces abierto; la llamada se rechazó sin tocar la red: {exc}"
+            ) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise ActivepiecesIntegrationError(f"Error de Activepieces: {exc}") from exc

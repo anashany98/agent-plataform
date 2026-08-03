@@ -155,6 +155,56 @@ class IdempotencyRecord(InstallationOwnedMixin, Base):
     status_code = Column(Integer, default=200, nullable=False)
 
 
+class OutboxMessage(InstallationOwnedMixin, Base):
+    """Cola durable de efectos externos pendientes (patrón outbox + DLQ).
+
+    Cada mensaje representa un efecto externo autorizado (p. ej. capturar un
+    lead en GHL) que no pudo completarse en línea. El estado ``dead`` es la
+    dead-letter queue: conserva payload, error e intentos hasta revisión
+    humana; nada se pierde ni se reintenta sin límite.
+    """
+
+    __tablename__ = "outbox_messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "installation_id",
+            "topic",
+            "idempotency_key",
+            name="uq_outbox_installation_topic_key",
+        ),
+        CheckConstraint(
+            "state IN ('pending','processing','sent','dead')",
+            name="ck_outbox_message_state",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0",
+            name="ck_outbox_message_attempts_nonnegative",
+        ),
+        CheckConstraint(
+            "max_attempts >= 1",
+            name="ck_outbox_message_max_attempts_positive",
+        ),
+    )
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    topic = Column(String(64), nullable=False, index=True)
+    idempotency_key = Column(String, nullable=False)
+    payload = Column(JSON, nullable=False)
+    state = Column(String(32), nullable=False, default="pending", index=True)
+    attempt_count = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(
+        Integer,
+        nullable=False,
+        default=lambda: int(settings.OUTBOX_MAX_ATTEMPTS),
+    )
+    next_attempt_at = Column(DateTime, nullable=False, default=utcnow, index=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+    sent_at = Column(DateTime, nullable=True)
+    last_error = Column(JSON, nullable=True)
+    response_body = Column(JSON, nullable=True)
+
+
 class ApprovalRequest(InstallationOwnedMixin, Base):
     __tablename__ = "approval_requests"
     __table_args__ = (

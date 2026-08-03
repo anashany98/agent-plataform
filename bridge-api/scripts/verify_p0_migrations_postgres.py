@@ -41,6 +41,7 @@ def _current_revision(engine) -> str | None:
 def _verify_p1_runtime_schema(engine) -> None:
     inspector = inspect(engine)
     _require(inspector.has_table("daily_llm_budgets"), "P1 daily budget ledger is missing")
+    _require(inspector.has_table("outbox_messages"), "D-021 outbox/DLQ table is missing")
     idempotency_columns = {
         str(column["name"])
         for column in inspector.get_columns("idempotency_records")
@@ -61,6 +62,31 @@ def _verify_p1_runtime_schema(engine) -> None:
         "P1 durable inbox columns are incomplete",
         sorted(required_columns - idempotency_columns),
     )
+    outbox_columns = {
+        str(column["name"])
+        for column in inspector.get_columns("outbox_messages")
+    }
+    required_outbox_columns = {
+        "installation_id",
+        "id",
+        "topic",
+        "idempotency_key",
+        "payload",
+        "state",
+        "attempt_count",
+        "max_attempts",
+        "next_attempt_at",
+        "created_at",
+        "updated_at",
+        "sent_at",
+        "last_error",
+        "response_body",
+    }
+    _require(
+        required_outbox_columns.issubset(outbox_columns),
+        "D-021 outbox columns are incomplete",
+        sorted(required_outbox_columns - outbox_columns),
+    )
 
 
 def _verify_head_cycle(
@@ -70,7 +96,7 @@ def _verify_head_cycle(
     run_id: str,
 ) -> dict[str, object]:
     command.upgrade(config, "head")
-    _require(_current_revision(engine) == "0003", "clean upgrade did not reach 0003")
+    _require(_current_revision(engine) == "0004", "clean upgrade did not reach 0004")
     _verify_p1_runtime_schema(engine)
     customer_id = f"p0-cycle-customer-{run_id}"
     product_id = f"p0-cycle-product-{run_id}"
@@ -144,7 +170,7 @@ def _verify_head_cycle(
     _require(preserved[2] is not None, "safe downgrade removed reservation expiry", preserved)
 
     command.upgrade(config, "head")
-    _require(_current_revision(engine) == "0003", "re-upgrade did not return to 0003")
+    _require(_current_revision(engine) == "0004", "re-upgrade did not return to 0004")
     _verify_p1_runtime_schema(engine)
     with installation_scope(installation_id):
         session = sessionmaker(bind=engine, expire_on_commit=False)()
@@ -160,7 +186,7 @@ def _verify_head_cycle(
             session.close()
     return {
         "mode": "head-cycle",
-        "revision": "0003",
+        "revision": "0004",
         "fixture_preserved": True,
         "active_reservation_preserved": True,
     }
@@ -286,7 +312,7 @@ def _verify_historical_upgrade(
     _require(_current_revision(engine) == "0001", "historical setup did not reach 0001")
     identifiers = _insert_historical_fixture(engine, installation_id, run_id)
     command.upgrade(config, "head")
-    _require(_current_revision(engine) == "0003", "historical upgrade did not reach 0003")
+    _require(_current_revision(engine) == "0004", "historical upgrade did not reach 0004")
     _verify_p1_runtime_schema(engine)
 
     expected_token_hash = hashlib.sha256(b"LEGACY-TOKEN").hexdigest()
@@ -360,7 +386,7 @@ def _verify_historical_upgrade(
     _require(len(foreign_keys) == 12, "historical upgrade lacks composite foreign keys", foreign_keys)
     return {
         "mode": "historical-upgrade",
-        "revision": "0003",
+        "revision": "0004",
         "fixture_preserved": True,
         "legacy_token_hashed": True,
         "composite_foreign_keys": len(foreign_keys),

@@ -3,7 +3,7 @@ from typing import Any, Dict, List
 import httpx
 
 from app.config import settings
-from app.services.http_retry import request_with_retry
+from app.services.resilience import CircuitOpenError, guarded_request_with_retry
 
 
 class ChatwootIntegrationError(RuntimeError):
@@ -25,17 +25,22 @@ class ChatwootAdapter:
             return {"status": "simulated", "path": path, "payload": payload}
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await request_with_retry(
+                response = await guarded_request_with_retry(
+                    "chatwoot",
                     lambda: client.post(
                         f"{self.base_url}{path}",
                         json=payload,
                         headers=self._headers(),
-                    )
+                    ),
                 )
                 response.raise_for_status()
                 if not response.content:
                     return {"status": "success", "http_status": response.status_code}
                 return response.json()
+        except CircuitOpenError as exc:
+            raise ChatwootIntegrationError(
+                f"Circuito hacia Chatwoot abierto; la llamada se rechazó sin tocar la red: {exc}"
+            ) from exc
         except (httpx.HTTPError, ValueError) as exc:
             raise ChatwootIntegrationError(f"Error al comunicarse con Chatwoot: {exc}") from exc
 

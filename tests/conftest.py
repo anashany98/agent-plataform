@@ -33,6 +33,12 @@ os.environ.update(
         'RAG_MIN_SCORE': '0.05',
         'ALLOWED_ORIGINS': 'http://testserver',
         'ALLOWED_HOSTS': 'testserver,localhost,127.0.0.1',
+        'CIRCUIT_BREAKER_FAILURE_THRESHOLD': '3',
+        'CIRCUIT_BREAKER_RECOVERY_SEC': '1',
+        'OUTBOX_MAX_ATTEMPTS': '3',
+        'OUTBOX_RETRY_BASE_DELAY_SEC': '0.01',
+        'OUTBOX_RETRY_MAX_DELAY_SEC': '0.05',
+        'OUTBOX_BATCH_SIZE': '8',
     }
 )
 
@@ -41,6 +47,17 @@ from app.database import SessionLocal
 from app.main import app
 from app.models.models import Customer, Pricelist, Product
 from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def _reset_circuit_breakers():
+    """Cada test parte de circuitos cerrados: el estado global no se hereda."""
+
+    from app.services.resilience import reset_all_breakers
+
+    reset_all_breakers()
+    yield
+    reset_all_breakers()
 
 
 @pytest.fixture(scope='session', autouse=True)

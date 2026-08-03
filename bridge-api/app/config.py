@@ -85,6 +85,16 @@ class Settings(BaseSettings):
     )
     IDEMPOTENCY_LEASE_SEC: PositiveInt = int(os.getenv("IDEMPOTENCY_LEASE_SEC", "300"))
     IDEMPOTENCY_MAX_ATTEMPTS: PositiveInt = int(os.getenv("IDEMPOTENCY_MAX_ATTEMPTS", "8"))
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD: PositiveInt = int(
+        os.getenv("CIRCUIT_BREAKER_FAILURE_THRESHOLD", "5")
+    )
+    CIRCUIT_BREAKER_RECOVERY_SEC: PositiveInt = int(
+        os.getenv("CIRCUIT_BREAKER_RECOVERY_SEC", "30")
+    )
+    OUTBOX_MAX_ATTEMPTS: PositiveInt = int(os.getenv("OUTBOX_MAX_ATTEMPTS", "8"))
+    OUTBOX_RETRY_BASE_DELAY_SEC: float = float(os.getenv("OUTBOX_RETRY_BASE_DELAY_SEC", "1.0"))
+    OUTBOX_RETRY_MAX_DELAY_SEC: float = float(os.getenv("OUTBOX_RETRY_MAX_DELAY_SEC", "300.0"))
+    OUTBOX_BATCH_SIZE: PositiveInt = int(os.getenv("OUTBOX_BATCH_SIZE", "16"))
     LLM_PRICING_CATALOG_JSON: str = os.getenv("LLM_PRICING_CATALOG_JSON", "")
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
     OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -169,6 +179,22 @@ class Settings(BaseSettings):
             errors.append("INTEGRATION_RETRY_DELAY")
         if self.IDEMPOTENCY_LEASE_SEC < 30 or self.IDEMPOTENCY_MAX_ATTEMPTS > 20:
             errors.append("IDEMPOTENCY_LEASE/ATTEMPTS")
+        if (
+            self.CIRCUIT_BREAKER_FAILURE_THRESHOLD < 1
+            or self.CIRCUIT_BREAKER_FAILURE_THRESHOLD > 100
+            or self.CIRCUIT_BREAKER_RECOVERY_SEC < 1
+            or self.CIRCUIT_BREAKER_RECOVERY_SEC > 3600
+        ):
+            errors.append("CIRCUIT_BREAKER")
+        if (
+            self.OUTBOX_MAX_ATTEMPTS < 1
+            or self.OUTBOX_MAX_ATTEMPTS > 20
+            or self.OUTBOX_RETRY_BASE_DELAY_SEC < 0
+            or self.OUTBOX_RETRY_MAX_DELAY_SEC < self.OUTBOX_RETRY_BASE_DELAY_SEC
+            or self.OUTBOX_BATCH_SIZE < 1
+            or self.OUTBOX_BATCH_SIZE > 64
+        ):
+            errors.append("OUTBOX_RETRY")
         if self.LLM_MAX_DAILY_COST_USD <= 0 or self.LLM_MAX_OUTPUT_TOKENS > 32768:
             errors.append("LLM_BUDGET/TOKEN_LIMIT")
         configured_external_model = any(
