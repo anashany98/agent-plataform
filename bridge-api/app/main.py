@@ -450,6 +450,46 @@ def _fail_idempotency(db: Session, key: str, owner_id: str, error: Exception, st
     db.commit()
 
 
+def _resume_webhook_from_checkpoint(
+    db: Session,
+    key: str,
+    owner_id: str,
+    record: Optional[IdempotencyRecord],
+    message_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Takeover con efecto ya checkpointado: completa sin repetir efectos externos.
+
+    Un crash después de un efecto externo (respuesta enviada al canal) pero
+    antes de ``_complete_idempotency`` deja el resultado checkpointado en
+    ``response_body``. La redelivery no debe repetir el efecto: completa el
+    registro con el resultado checkpointado y lo devuelve. Solo aplica a
+    takeovers (``attempt_count > 1``) con un checkpoint de éxito; un fallo
+    anterior a cualquier efecto se reintenta con normalidad.
+    """
+
+    if record is None or int(record.attempt_count or 0) <= 1:
+        return None
+    checkpoint = record.response_body if isinstance(record.response_body, dict) else {}
+    if checkpoint.get("status") != "success":
+        return None
+    _complete_idempotency(db, key, owner_id, checkpoint, 200)
+    _audit(
+        db,
+        event_type="webhook_checkpoint_resume",
+        status_value="success",
+        details={
+            "idempotency_key": key,
+            "message_id": message_id,
+            "attempt_count": int(record.attempt_count or 0),
+        },
+    )
+    return {
+        "status": "resumed_from_checkpoint",
+        "idempotency_key": message_id,
+        "original_response": checkpoint,
+    }
+
+
 def _get_or_create_customer_from_webhook(db: Session, body: Dict[str, Any], account_id: str, conversation_id: str) -> Customer:
     sender = body.get("sender") or {}
     email = str(sender.get("email") or "").strip().lower()
@@ -919,6 +959,10 @@ async def receive_chatwoot_webhook(
         raise HTTPException(status_code=503, detail="No se pudo adquirir el lease del webhook")
     claim_owner = existing.owner_id
 
+    resumed = _resume_webhook_from_checkpoint(db, idempotency_key, claim_owner, existing, message_id)
+    if resumed is not None:
+        return resumed
+
     try:
         event = body.get("event")
         if event != "message_created":
@@ -950,6 +994,7 @@ async def receive_chatwoot_webhook(
             reply = "Te he transferido al equipo comercial. Te atenderán lo antes posible."
             await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
             result = {"status": "success", "action": "human_handoff", "reply": reply}
+            _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
         elif confirmation_token:
             state_row = db.query(ConversationState).filter(
                 ConversationState.account_id == account_id,
@@ -982,6 +1027,7 @@ async def receive_chatwoot_webhook(
                 **order_result,
                 "reply": reply,
             }
+            _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
         elif any(term in lowered for term in ("confirmar", "acepto", "aceptar")):
             # Las frases libres, incluidas las negaciones, jamás ejecutan un
             # efecto comercial. La confirmación solo admite el comando exacto
@@ -992,6 +1038,7 @@ async def receive_chatwoot_webhook(
             )
             await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
             result = {"status": "success", "action": "confirmation_not_applied", "reply": reply}
+            _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
         elif any(term in lowered for term in ("necesito", "comprar", "busco", "unidades", "producto")):
             query = _extract_product_query(content)
             qty = _extract_quantity(content)
@@ -1035,6 +1082,7 @@ async def receive_chatwoot_webhook(
                 reply = "No he encontrado un producto verificable que coincida con tu necesidad. Te transfiero al equipo comercial."
                 await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
                 result = {"status": "success", "action": "no_product_found", "reply": reply}
+                _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
             else:
                 product = products[0]
                 stock = tools.check_stock(product["id"], qty)
@@ -1042,6 +1090,7 @@ async def receive_chatwoot_webhook(
                     reply = f"He encontrado {product['name']}, pero no hay {qty} unidades disponibles. Puedo transferirte al equipo comercial."
                     await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
                     result = {"status": "success", "action": "insufficient_stock", "product": product, "reply": reply}
+                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
                 else:
                     customer = _get_or_create_customer_from_webhook(db, body, account_id, conversation_id)
                     quote = tools.create_quote(
@@ -1070,6 +1119,7 @@ async def receive_chatwoot_webhook(
                         "lead": lead_result,
                         "reply": reply,
                     }
+                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
         else:
             # En el piloto comercial no se permite responder con datos de
             # producto generados libremente por un LLM. Primero se buscan
@@ -1100,6 +1150,7 @@ async def receive_chatwoot_webhook(
                     "products": verified_products,
                     "reply": reply,
                 }
+                _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
             else:
                 try:
                     evidence = await RAGService(db).search(content, top_k=3, role="public")
@@ -1114,6 +1165,7 @@ async def receive_chatwoot_webhook(
                         reply += f"\n\nFuentes: {sources}."
                     await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
                     result = {"status": "success", "action": "verified_document_answer", "reply": reply, "evidence": evidence}
+                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
                 else:
                     reply = (
                         "No tengo información verificable suficiente para responder con seguridad. "
@@ -1128,6 +1180,7 @@ async def receive_chatwoot_webhook(
                         "Consulta transferida porque no existe evidencia suficiente en catálogo o documentación.",
                     )
                     result = {"status": "success", "action": "insufficient_evidence_handoff", "reply": reply}
+                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
 
         _heartbeat_idempotency(db, idempotency_key, claim_owner)
         _complete_idempotency(db, idempotency_key, claim_owner, result)
