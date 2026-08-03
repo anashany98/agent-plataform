@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Informe histórico de la remediación previa (31/07/2026). Sus afirmaciones de estado, pruebas y cobertura quedaron invalidadas por la reproducción de Fase 1 (defectos P0 rojos) y por la remediación posterior en la rama `production-remediation`. El único estado autoritativo es `docs/PRODUCTION_READINESS.md`.
+
 # Informe final de la remediación
 
 La remediación del código propio ha finalizado con **31 pruebas automatizadas superadas** y **67 % de cobertura backend**. Se han corregido los defectos críticos de la revisión inicial y se ha añadido el MVP técnico para PrestaShop y GHL.

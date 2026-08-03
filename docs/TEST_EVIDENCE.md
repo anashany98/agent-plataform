@@ -119,9 +119,11 @@ Acción de entorno autorizada por el propietario (`DECISIONS.md` D-008): el 2026
 | 2026-08-03 | Corpus combinado tras D-029, env limpio, orden `tests bridge-api/tests` | 228 passed; 69,32 s | Regresión completa verde con los evals de lifecycle |
 | 2026-08-03 | Corpus combinado tras D-029, env limpio, orden inverso `bridge-api/tests tests` | 228 passed; 60,63 s | Sin dependencia del orden de colección |
 | 2026-08-03 | Migraciones herméticas actualizadas a head `0005` | 23 passed | Clean, histórica, downgrade/reupgrade y reserva activa conservadas con la tabla `installation_lifecycle` |
+| 2026-08-03 | D-026/D-027 `33d77c1`: portal con secciones reales (cinco anchors rotos corregidos), runner vitest + testing-library + vitest-axe y claims de documentación corregidos | 5 evals frontend passed (login accesible con error del servidor, cada ancla con destino renderizado, secciones con datos reales, error explícito sin permisos, aprobaciones decidibles + axe) y 1 eval backend (listado `GET /rag/documents` sin rutas de disco ni contenido) | `npm run typecheck`, `npm run build` y `npm run test` verdes; ningún anchor sin destino; los módulos muestran datos reales o estados vacío/error explícitos |
+| 2026-08-03 | Corpus combinado tras D-026/D-027, env limpio, orden `tests bridge-api/tests` | 229 passed; 63,32 s | Regresión completa verde con el eval del listado de documentos |
 | 2026-08-03 | Ruff focalizado `E9,F,I` + archivos nuevos al completo | Verde | Deuda de estilo histórica de `main.py` permanece registrada (D-030); `ghl_adapter.py`, `rag_security.py`, `audit_dependencies.py`, `observability.py` y `lifecycle.py` limpios al completo; imports muertos del middleware D-028 eliminados en `ff0eed8` |
 
-El conteo coincide con el corpus documentado: 205 tests en `tests/` + 23 en `bridge-api/tests` = 228. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
+El conteo coincide con el corpus documentado: 206 tests en `tests/` + 23 en `bridge-api/tests` = 229. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
 
 ## Próxima evidencia obligatoria — P1 restante de Fase 2
 

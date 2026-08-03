@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Informe histórico de la remediación previa (31/07/2026). Sus afirmaciones de estado, pruebas y cobertura quedaron invalidadas por la reproducción de Fase 1 (defectos P0 rojos) y por la remediación posterior en la rama `production-remediation`. El único estado autoritativo es `docs/PRODUCTION_READINESS.md`.
+
 # Informe de remediación técnica — `agent-platform`
 
 **Fecha:** 31/07/2026  

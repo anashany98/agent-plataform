@@ -4,20 +4,17 @@ Plataforma de instalación aislada por cliente que integra un núcleo transaccio
 
 ## Estado verificado
 
-**Código remediado. Pruebas automatizadas internas superadas. Validación Docker y conexiones externas pendiente en un entorno con Docker y credenciales reales.**
+**Decisión actual: `NOT PRODUCTION READY — CRITICAL RISK`** (ver `docs/PRODUCTION_READINESS.md`, única fuente autoritativa).
 
-Resultados incluidos en `test-results/remediation/`:
+Estado de la remediación en la rama `production-remediation` (2026-08-03):
 
-- 31 pruebas automatizadas superadas.
-- 67 % de cobertura del backend.
-- Compilación Python correcta.
-- Migración Alembic: subida, bajada y nueva subida correctas.
-- Sintaxis Bash correcta.
-- Docker Compose analizado estáticamente: 14 servicios.
-- TypeScript del portal validado.
-- Escaneo básico de secretos sin hallazgos en el código propio.
+- Seis P0, quince P1 y dos P2 verificados con evidencia reproducible; 14 defectos abiertos (11 P1, 3 P2).
+- Corpus combinado de 228 pruebas (`pytest tests bridge-api/tests`) verde en ambos órdenes de colección.
+- Migraciones Alembic aditivas hasta la revisión `0005`; downgrades preservadores.
+- Portal con typecheck, build y tests de componentes/accesibilidad (vitest + axe) verdes.
+- `pip-audit` y `npm audit --omit=dev` sin vulnerabilidades (`scripts/audit_dependencies.py`).
 
-No se declara preparación para producción ni piloto comercial hasta completar `docs/LIVE_VALIDATION_CHECKLIST.md`.
+Los informes previos a la remediación (`docs/REMEDIATION_REPORT.md`, `docs/MASTER_PLATFORM_REPORT.md`, `docs/FINAL_REPORT.md`, `docs/COMMERCIAL_READINESS_REPORT.md`) están marcados como **SUPERSEDED** y no deben usarse para decisiones actuales. No se declara preparación para producción ni piloto comercial hasta superar los gates de `docs/PRODUCTION_READINESS.md`.
 
 ## Arquitectura
 
