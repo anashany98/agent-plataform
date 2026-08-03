@@ -6,6 +6,7 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 
 ### Added
 
+- Clasificación, DLP y defensa anti prompt injection para RAG (D-020): niveles `public`/`internal`/`confidential`/`restricted` con ACL deny-by-default (legado sin clasificación conserva ACL estricta); DLP determinista en ingesta (DNI/NIE con letra, tarjeta con Luhn, IBAN ES mod-97, JWT, AWS, claves `sk_live`, claves privadas) que eleva la clasificación a `confidential` sin persistir valores; redacción de secretos en respuesta y citas; bloqueo de consultas con patrones de inyección y marcado `trusted=false` del contenido recuperado (`0541650`).
 - Reconciliación GHL previa al efecto (D-010): `find_opportunity_by_reference` (custom field `external_reference`) y `find_note_by_body` en el adaptador, integradas en el dispatcher del outbox y en `/integrations/ghl/leads`; paginación acotada hasta EOF con fallo cerrado ante listados anómalos, DLQ directa para leads sin referencia externa, checkpoint `reconciled` y auditoría `ghl_lead_reconciled` (`ce2723c`).
 - Recuperación de crash ambiguo en el webhook comercial (D-035): checkpoint del resultado tras cada efecto externo visible y resume en takeover (`_resume_webhook_from_checkpoint`) que completa desde un checkpoint de éxito sin repetir respuestas ni presupuestos; auditoría `webhook_checkpoint_resume` (`5a3edf8`).
 - Resiliencia de integraciones (D-021): circuit breakers por proveedor (`chatwoot`, `ghl`, `prestashop`, `activepieces`), outbox durable con enqueue idempotente, claim CAS, backoff determinista y dead-letter queue, endpoints `GET /outbox`, `POST /outbox/process` y `POST /outbox/{id}/retry` con roles, métricas de outbox/breakers y migración aditiva `0004` (`3733bad`).
@@ -36,6 +37,7 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 
 ### Fixed
 
+- La fuga de secretos por DLP evadible y la falta de clasificación RAG: ahora los secretos detectados (DNI, tarjeta, IBAN, JWT, claves) elevan la clasificación del documento a `confidential` y se redactan en respuesta y citas; las consultas que intentan manipular las instrucciones del sistema se rechazan; el contenido recuperado se marca como no confiable (`0541650`, D-020).
 - La microventana efecto→checkpoint de GHL (residual de D-035) ya no duplica oportunidades ni notas: como GHL no acepta claves de idempotencia, cada creación se reconcilia antes contra el proveedor y se reutiliza el efecto existente; una búsqueda de reconciliación fallida falla cerrada y nunca se crea a ciegas (`ce2723c`, D-010).
 - Un crash del worker entre el efecto externo y el cierre de idempotencia ya no duplica efectos en la redelivery: el takeover detecta el checkpoint de éxito y completa sin reenviar la respuesta ni recrear el presupuesto; la deduplicación por `source_message_id` protege los reintentos sin checkpoint (`5a3edf8`, D-035).
 - El cierre de `installation_scope` restaura el ámbito anterior aunque el cleanup se ejecute en un contexto distinto (cierre de dependencias generador tras un error de petición); los errores esperados ya no se convierten en 500 (`3733bad`).
