@@ -23,8 +23,9 @@
 - `48051e8` cerró seis P1 y un P2: aprobación CAS, Activepieces estricto, coste/presupuesto IA, paginación/visibilidad PrestaShop, importación atómica idempotente y health separado. Sumado al verificador PostgreSQL cerrado en `de236e9`, hay siete P1 verificados; Webhooks/GHL, RAG, resiliencia, perfil seguro y handoff conservan alcance parcial o live pendiente.
 - El 2026-08-03 se re-verificó el corpus en vivo: la corrida combinada reproducía 2 fallos por contaminación de entorno (D-032); tras `4afd0c7` el corpus combinado pasa 159/159 en ambos órdenes de colección con entorno limpio. D-032 queda VERIFIED (P2).
 - El 2026-08-03 se cerró D-012 con `4d97449`: `ToolExecutor` deny-by-default (`/agents/tools/invoke`), allowlist estricta por agente, argumentos validados, herramientas financieras prohibidas y auditoría; 10 evals nuevos y corpus combinado 169/169.
+- El 2026-08-03 se cerró D-021 con `3733bad`: circuit breakers por proveedor en los cuatro adapters HTTP, outbox durable con claim CAS, backoff determinista y DLQ (`OutboxService`, migración `0004`), captura GHL reencolada con checkpoints durables, endpoints `/outbox*` con roles y métricas; 18 evals nuevos y corpus combinado 187/187 en ambos órdenes de colección.
 - El 2026-08-03, con autorización del propietario, se detuvieron los tres compose projects del workspace antiguo (`agent-platform`, `agent-piloto-rc1`, `agent-cliente-demo-es-staging`); volúmenes intactos y puerto 9000 liberado. La memoria de la VM Docker queda pendiente de liberación/medición (B-001 mitigado).
-- Permanecen 18 P1 y 3 P2 no verificados; no existe candidata de release ni evidencia E2E/live suficiente.
+- Permanecen 17 P1 y 3 P2 no verificados; no existe candidata de release ni evidencia E2E/live suficiente.
 - El build del portal fue reproducido anteriormente; la UX dinámica permanece sin validar.
 
 ## Stop-ship abiertos tras el cierre P0
