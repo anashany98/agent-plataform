@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.models import RAGChunk, RAGDocument
+from app.services import rag_security
 
 
 class RAGError(ValueError):
@@ -277,12 +278,29 @@ class RAGService:
         else:
             vectors = await self._remote_embeddings(chunks)
 
-        document_metadata = metadata or {}
+        document_metadata = dict(metadata or {})
         allowed_roles = document_metadata.get("allowed_roles")
         if allowed_roles is not None and (
             not isinstance(allowed_roles, list) or not all(isinstance(role, str) for role in allowed_roles)
         ):
             raise RAGError("allowed_roles debe ser una lista de roles")
+        try:
+            requested_classification = rag_security.normalize_classification(
+                document_metadata.get("classification")
+            )
+        except ValueError as exc:
+            raise RAGError(str(exc)) from exc
+        # DLP: los tipos detectados se registran sin conservar valores y
+        # elevan la clasificación efectiva como mínimo a confidential.
+        dlp_findings = sorted(rag_security.detect_dlp(text))
+        classification = rag_security.effective_classification(
+            document_metadata.get("classification"), set(dlp_findings)
+        )
+        document_metadata["classification"] = classification
+        if dlp_findings:
+            document_metadata["dlp_findings"] = dlp_findings
+            if classification != requested_classification:
+                document_metadata["dlp_auto_classified"] = True
 
         existing = self.db.query(RAGDocument).filter(RAGDocument.id == doc_id).first()
         if existing:
@@ -329,26 +347,35 @@ class RAGService:
             "embedding_provider": provider,
             "embedding_model": settings.EMBEDDING_MODEL,
             "embedding_dimension": settings.EMBEDDING_DIMENSION,
+            "classification": classification,
+            "dlp_findings": dlp_findings,
         }
 
     @staticmethod
     def _can_read(document: RAGDocument | None, role: str | None) -> bool:
         if document is None:
             return False
-        allowed = (document.metadata_json or {}).get("allowed_roles")
-        return (
-            isinstance(allowed, list)
-            and bool(allowed)
-            and role is not None
-            and role in allowed
+        metadata = document.metadata_json or {}
+        return rag_security.can_read(
+            classification=metadata.get("classification"),
+            allowed_roles=metadata.get("allowed_roles"),
+            role=role,
         )
 
     async def search(self, query: str, top_k: int = 3, min_score: float | None = None, role: str | None = None) -> Dict[str, Any]:
         clean_query = query.strip()
         if not clean_query:
             raise RAGError("La consulta no puede estar vacía")
+        if rag_security.looks_like_injection(clean_query):
+            return {
+                "abstained": True,
+                "score": 0.0,
+                "answer": "La consulta parece intentar manipular las instrucciones del sistema y se rechaza.",
+                "citations": [],
+                "trusted": False,
+            }
         if self._looks_like_secret_request(clean_query):
-            return {"abstained": True, "score": 0.0, "answer": "No puedo proporcionar secretos, credenciales ni datos privados.", "citations": []}
+            return {"abstained": True, "score": 0.0, "answer": "No puedo proporcionar secretos, credenciales ni datos privados.", "citations": [], "trusted": False}
 
         chunks = self.db.query(RAGChunk).all()
         readable: list[RAGChunk] = []
@@ -362,7 +389,7 @@ class RAGService:
             if self._can_read(document, role):
                 readable.append(chunk)
         if not readable:
-            return {"abstained": True, "score": 0.0, "answer": "No hay documentos autorizados disponibles para responder.", "citations": []}
+            return {"abstained": True, "score": 0.0, "answer": "No hay documentos autorizados disponibles para responder.", "citations": [], "trusted": False}
 
         provider = settings.EMBEDDING_PROVIDER.lower()
         query_vector: List[float]
@@ -401,26 +428,34 @@ class RAGService:
                 "score": round(highest, 4),
                 "answer": "No tengo evidencia suficiente en los documentos para responder con fiabilidad.",
                 "citations": [],
+                "trusted": False,
             }
         citations = []
         evidence = []
         for score, chunk in selected:
             document = documents.get(chunk.document_id)
+            # DLP en respuesta: los secretos se redactan aunque el lector
+            # esté autorizado; el resultado alimenta canales de chat/IA.
+            snippet, _ = rag_security.redact_text(chunk.text[:300])
+            redacted_chunk, _ = rag_security.redact_text(chunk.text)
             citations.append(
                 {
                     "doc_id": chunk.document_id,
                     "file_name": document.file_name if document else None,
                     "chunk_id": chunk.id,
                     "score": round(score, 4),
-                    "snippet": chunk.text[:300],
+                    "snippet": snippet,
                 }
             )
-            evidence.append(chunk.text)
+            evidence.append(redacted_chunk)
         return {
             "abstained": False,
             "score": round(selected[0][0], 4),
             "answer": "\n\n".join(evidence[:2]),
             "citations": citations,
+            # El contenido recuperado es DATO no confiable: nunca debe
+            # ejecutarse como instrucción ni tratarse como entrada de usuario.
+            "trusted": False,
         }
 
     def delete_document(self, doc_id: str) -> bool:
