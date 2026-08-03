@@ -103,13 +103,16 @@ Acción de entorno autorizada por el propietario (`DECISIONS.md` D-008): el 2026
 | 2026-08-03 | D-035 `5a3edf8`: checkpoint del resultado tras cada efecto externo visible y resume en takeover (`_resume_webhook_from_checkpoint`) | 3 evals passed (crash inyectado tras el efecto, lease caducado con `processing` atascado y fallo antes del efecto con dedupe por `source_message_id`) | El takeover con checkpoint de éxito completa sin repetir respuesta ni presupuesto; los mensajes ya completados siguen siendo `duplicate_ignored`; auditoría `webhook_checkpoint_resume` |
 | 2026-08-03 | Corpus combinado tras D-035, env limpio, orden `tests bridge-api/tests` | 190 passed; 14,13 s | Regresión completa verde con los evals de crash/recovery |
 | 2026-08-03 | Corpus combinado tras D-035, env limpio, orden inverso `bridge-api/tests tests` | 190 passed; 14,78 s | Sin dependencia del orden de colección |
-| 2026-08-03 | Ruff focalizado `E9,F,I` + archivos nuevos al completo | Verde | Deuda de estilo histórica de `main.py` permanece registrada (D-030) |
+| 2026-08-03 | D-010 `ce2723c`: reconciliación GHL previa al efecto (`find_opportunity_by_reference` por `external_reference`, `find_note_by_body`) en dispatcher outbox y `/integrations/ghl/leads` | 6 evals passed (crash en ventana de oportunidad, crash en ventana de nota, crash del endpoint directo con takeover, fail-closed con búsqueda caída, DLQ por referencia ausente y contratos del adaptador) | Un crash en cualquier ventana efecto→checkpoint produce como mucho un efecto externo por lead contra un doble de proveedor que duplicaría si se le llamara dos veces; sin reconciliación verificable nunca se crea; el lead sin referencia va a DLQ; reconciliación auditada (`ghl_lead_reconciled`) |
+| 2026-08-03 | Corpus combinado tras D-010, env limpio, orden `tests bridge-api/tests` | 196 passed; 14,75 s | Regresión completa verde con los evals de reconciliación |
+| 2026-08-03 | Corpus combinado tras D-010, env limpio, orden inverso `bridge-api/tests tests` | 196 passed; 15,01 s | Sin dependencia del orden de colección |
+| 2026-08-03 | Ruff focalizado `E9,F,I` + archivos nuevos al completo | Verde | Deuda de estilo histórica de `main.py` permanece registrada (D-030); `ghl_adapter.py` saneado al completo (UP/I) en `ce2723c` |
 
-El conteo coincide con el corpus documentado: 167 tests en `tests/` + 23 en `bridge-api/tests` = 190. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
+El conteo coincide con el corpus documentado: 173 tests en `tests/` + 23 en `bridge-api/tests` = 196. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
 
 ## Próxima evidencia obligatoria — P1 restante de Fase 2
 
-1. Claves de idempotencia del proveedor GHL (D-010) y la microventana efecto→checkpoint en el proveedor; el crash ambiguo bridge-side ya está verificado (D-035, `5a3edf8`) y el outbox/DLQ con circuit breakers también (`3733bad`).
+1. Contrato live del endpoint de búsqueda/reconciliación GHL pendiente de sandbox (B-004); la microventana efecto→checkpoint ya está cerrada por reconciliación (D-010, `ce2723c`), el crash ambiguo bridge-side verificado (D-035, `5a3edf8`) y el outbox/DLQ con circuit breakers también (`3733bad`).
 2. Clasificación/DLP y corpus de exfiltración/prompt injection (D-020); el executor de herramientas deny-by-default ya está verificado (`4d97449`).
 3. Egress, proxy, Chatwoot, perfiles, límites y observabilidad verificados en runtime seguro.
 4. Backup/restore en instalación vacía y release/rollback trazable.

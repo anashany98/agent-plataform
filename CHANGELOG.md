@@ -6,6 +6,7 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 
 ### Added
 
+- Reconciliación GHL previa al efecto (D-010): `find_opportunity_by_reference` (custom field `external_reference`) y `find_note_by_body` en el adaptador, integradas en el dispatcher del outbox y en `/integrations/ghl/leads`; paginación acotada hasta EOF con fallo cerrado ante listados anómalos, DLQ directa para leads sin referencia externa, checkpoint `reconciled` y auditoría `ghl_lead_reconciled` (`ce2723c`).
 - Recuperación de crash ambiguo en el webhook comercial (D-035): checkpoint del resultado tras cada efecto externo visible y resume en takeover (`_resume_webhook_from_checkpoint`) que completa desde un checkpoint de éxito sin repetir respuestas ni presupuestos; auditoría `webhook_checkpoint_resume` (`5a3edf8`).
 - Resiliencia de integraciones (D-021): circuit breakers por proveedor (`chatwoot`, `ghl`, `prestashop`, `activepieces`), outbox durable con enqueue idempotente, claim CAS, backoff determinista y dead-letter queue, endpoints `GET /outbox`, `POST /outbox/process` y `POST /outbox/{id}/retry` con roles, métricas de outbox/breakers y migración aditiva `0004` (`3733bad`).
 - Executor de herramientas deny-by-default (`ToolExecutor`, `/agents/tools/invoke`, `GET /agents/{id}/tools`): allowlist estricta por agente contra un catálogo cerrado, validación de argumentos, herramientas financieras prohibidas para agentes y auditoría de cada decisión (`4d97449`, D-012).
@@ -35,6 +36,7 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 
 ### Fixed
 
+- La microventana efecto→checkpoint de GHL (residual de D-035) ya no duplica oportunidades ni notas: como GHL no acepta claves de idempotencia, cada creación se reconcilia antes contra el proveedor y se reutiliza el efecto existente; una búsqueda de reconciliación fallida falla cerrada y nunca se crea a ciegas (`ce2723c`, D-010).
 - Un crash del worker entre el efecto externo y el cierre de idempotencia ya no duplica efectos en la redelivery: el takeover detecta el checkpoint de éxito y completa sin reenviar la respuesta ni recrear el presupuesto; la deduplicación por `source_message_id` protege los reintentos sin checkpoint (`5a3edf8`, D-035).
 - El cierre de `installation_scope` restaura el ámbito anterior aunque el cleanup se ejecute en un contexto distinto (cierre de dependencias generador tras un error de petición); los errores esperados ya no se convierten en 500 (`3733bad`).
 - El outbox cuenta los intentos correctamente al agotar reintentos y los checkpoints del dispatcher GHL se persisten con diccionarios nuevos para que SQLAlchemy detecte cada actualización JSON (`3733bad`).

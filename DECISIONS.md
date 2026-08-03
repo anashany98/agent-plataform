@@ -41,3 +41,9 @@
 **Estado:** APPROVED
 **Fecha:** 2026-08-03
 **Decisión:** El propietario autoriza detener los compose projects `agent-platform`, `agent-piloto-rc1` y `agent-cliente-demo-es-staging` del workspace antiguo `C:\Users\PC\Desktop\PROYECTOS\automatiazcion\agent-platform` para liberar RAM y el puerto 9000. Ejecutado el 2026-08-03 con `docker compose down` sin `-v`: los volúmenes y datos se conservan; solo se retiraron contenedores y redes.
+
+## D-009 — Idempotencia GHL por reconciliación, no por claves de proveedor
+
+**Estado:** ACCEPTED
+**Fecha:** 2026-08-03
+**Decisión:** La API de GHL no acepta claves de idempotencia en la creación de contactos, oportunidades ni notas (y B-004 impide verificarlo live), así que la garantía de "como mucho un efecto externo" se implementa con reconciliación previa al efecto: antes de crear una oportunidad se busca por referencia externa determinista (custom field `external_reference` = `external_id`) y antes de crear una nota se busca por cuerpo exacto. Si la búsqueda falla no se crea a ciegas (fail-closed: reintento transitorio); un lead sin referencia externa es permanente y va a DLQ. La reconciliación se aplica en el dispatcher del outbox y en `/integrations/ghl/leads` (`ce2723c`, D-010). Residual documentado: el contrato live del endpoint de búsqueda queda pendiente de sandbox GHL.
