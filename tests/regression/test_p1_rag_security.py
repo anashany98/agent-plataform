@@ -18,6 +18,7 @@ producción), fixtures sintéticos en ``tmp_path`` y sin servicios externos.
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -487,3 +488,32 @@ def test_cross_installation_rag_isolation(tmp_path: Path, monkeypatch: pytest.Mo
         else:
             app.dependency_overrides[get_current_principal] = previous_principal
         engine.dispose()
+
+
+def test_documents_listing_excludes_disk_paths(rag_env, tmp_path: Path) -> None:
+    """`GET /rag/documents` lista metadatos sin exponer rutas de disco ni contenido."""
+
+    document = tmp_path / "listado-seguro.txt"
+    document.write_text("Contenido que no debe aparecer en el listado.", encoding="utf-8")
+    ingest = rag_env.client.post(
+        "/rag/ingest",
+        json={
+            "doc_id": "listado-seguro",
+            "file_path": str(document),
+            "metadata": {"classification": "internal"},
+        },
+    )
+    assert ingest.status_code == 200, ingest.text
+
+    listing = rag_env.client.get("/rag/documents")
+    assert listing.status_code == 200, listing.text
+    documents = listing.json()["documents"]
+    assert len(documents) == 1
+    row = documents[0]
+    assert row["id"] == "listado-seguro"
+    assert row["file_name"] == "listado-seguro.txt"
+    assert row["classification"] == "internal"
+    serialized = json.dumps(row)
+    assert "file_path" not in row, "El listado no debe exponer la clave file_path"
+    assert str(document) not in serialized, "El listado no debe exponer rutas de disco"
+    assert "Contenido que no debe aparecer" not in serialized

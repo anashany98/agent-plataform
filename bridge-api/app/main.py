@@ -32,6 +32,7 @@ from app.models.models import (
     Pricelist,
     Product,
     Quote,
+    RAGDocument,
     User,
 )
 from app.rate_limit import RateLimitMiddleware
@@ -1514,6 +1515,32 @@ def delete_rag_document(doc_id: str, _: Principal = Depends(require_roles(*ADMIN
     if not RAGService(db).delete_document(doc_id):
         raise HTTPException(status_code=404, detail="Documento no encontrado")
     return {"status": "deleted", "doc_id": doc_id}
+
+
+@app.get("/rag/documents", tags=["Documentos"])
+def list_rag_documents(_: Principal = Depends(require_roles(*READ_ROLES)), db: Session = Depends(get_db)):
+    """Listado seguro de documentos RAG: sin rutas de disco ni contenido."""
+
+    documents = (
+        db.query(RAGDocument)
+        .filter(RAGDocument.installation_id == settings.INSTALLATION_ID)
+        .order_by(RAGDocument.created_at.desc())
+        .all()
+    )
+    return {
+        "documents": [
+            {
+                "id": document.id,
+                "file_name": document.file_name,
+                "mime_type": document.mime_type,
+                "sha256": document.sha256,
+                "classification": (document.metadata_json or {}).get("classification", "internal"),
+                "dlp_findings": (document.metadata_json or {}).get("dlp_findings", []),
+                "created_at": document.created_at.isoformat() if document.created_at else None,
+            }
+            for document in documents
+        ]
+    }
 
 
 # ---------------------------------------------------------------------------
