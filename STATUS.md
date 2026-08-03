@@ -7,6 +7,8 @@
 **Commit P1 de invariantes:** `48051e8`
 **Commit harness hermético (D-032):** `4afd0c7`
 **Commit tool policy (D-012):** `4d97449`
+**Commit resiliencia (D-021):** `3733bad`
+**Commit crash recovery (D-035):** `5a3edf8`
 **Fase activa:** Fase 2 — Wave 1 de P1/P2 corregibles sin runtime (P0 cerrados)
 **Ruta aprobada:** Ruta A — candidata core con limitaciones documentadas (`DECISIONS.md` D-007)
 **Decisión:** **NOT PRODUCTION READY — CRITICAL RISK**
@@ -24,13 +26,14 @@
 - El 2026-08-03 se re-verificó el corpus en vivo: la corrida combinada reproducía 2 fallos por contaminación de entorno (D-032); tras `4afd0c7` el corpus combinado pasa 159/159 en ambos órdenes de colección con entorno limpio. D-032 queda VERIFIED (P2).
 - El 2026-08-03 se cerró D-012 con `4d97449`: `ToolExecutor` deny-by-default (`/agents/tools/invoke`), allowlist estricta por agente, argumentos validados, herramientas financieras prohibidas y auditoría; 10 evals nuevos y corpus combinado 169/169.
 - El 2026-08-03 se cerró D-021 con `3733bad`: circuit breakers por proveedor en los cuatro adapters HTTP, outbox durable con claim CAS, backoff determinista y DLQ (`OutboxService`, migración `0004`), captura GHL reencolada con checkpoints durables, endpoints `/outbox*` con roles y métricas; 18 evals nuevos y corpus combinado 187/187 en ambos órdenes de colección.
+- El 2026-08-03 se cerró D-035 con `5a3edf8`: el webhook checkpointa el resultado tras cada efecto externo visible y el takeover con checkpoint de éxito completa sin repetir efectos (`_resume_webhook_from_checkpoint`); 3 evals de crash/recovery y corpus combinado 190/190 en ambos órdenes de colección. La microventana efecto→checkpoint persiste hasta disponer de claves de idempotencia del proveedor (D-010).
 - El 2026-08-03, con autorización del propietario, se detuvieron los tres compose projects del workspace antiguo (`agent-platform`, `agent-piloto-rc1`, `agent-cliente-demo-es-staging`); volúmenes intactos y puerto 9000 liberado. La memoria de la VM Docker queda pendiente de liberación/medición (B-001 mitigado).
-- Permanecen 17 P1 y 3 P2 no verificados; no existe candidata de release ni evidencia E2E/live suficiente.
+- Permanecen 16 P1 y 3 P2 no verificados; no existe candidata de release ni evidencia E2E/live suficiente.
 - El build del portal fue reproducido anteriormente; la UX dinámica permanece sin validar.
 
 ## Stop-ship abiertos tras el cierre P0
 
-1. Webhooks/GHL ya tienen inbox durable, lease y checkpoints, pero falta reconciliación/outbox ante resultados externos ambiguos y una prueba exhaustiva de fault injection.
+1. Webhooks/GHL ya tienen inbox durable, lease, checkpoints y recuperación de crash ambiguo tras efecto; quedan las claves de idempotencia del proveedor (D-010) y una prueba exhaustiva de fault injection.
 2. RAG niega ACL ausentes, pero clasificación, DLP y corpus de prompt injection/exfiltración permanecen abiertos.
 3. Egress, proxy y Chatwoot no están verificados en runtime; la asignación de handoff solo está demostrada con contratos locales.
 4. Restore, release/rollback, dependencias, observabilidad, recursos y licencias siguen sin gate aprobado.
@@ -42,7 +45,7 @@
 |---|---|---|
 | 0 — Baseline | VERIFIED | Cuatro documentos completos; topología, estados, enlaces y Compose contrastados sin arrancar servicios |
 | 1 — Reproducción | VERIFIED | 19 tests rojos; registros de defectos/riesgos/evidencia; 32 defectos contrastados |
-| 2 — P0/P1 | IN PROGRESS | Seis P0, ocho P1 y dos P2 `VERIFIED`; quedan 18 P1 y 3 P2 no verificados, varios con remediación parcial |
+| 2 — P0/P1 | IN PROGRESS | Seis P0, diez P1 y dos P2 `VERIFIED`; quedan 16 P1 y 3 P2 no verificados, varios con remediación parcial |
 | 3–29 | BLOCKED | Orden obligatorio; dependen de P0/P1 y core estable |
 | Release | BLOCKED | No se cumplen gates de producción |
 
