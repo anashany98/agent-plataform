@@ -95,6 +95,9 @@ Acción de entorno autorizada por el propietario (`DECISIONS.md` D-008): el 2026
 | 2026-08-03 | Corpus combinado, env limpio, orden `tests bridge-api/tests` | 159 passed; 14,45 s | D-032 VERIFIED: un único comando reproducible |
 | 2026-08-03 | Corpus combinado, env limpio, orden inverso `bridge-api/tests tests` | 159 passed; 15,80 s | Sin dependencia del orden de colección |
 | 2026-08-03 | Portal `npm run typecheck` | `tsc --noEmit` limpio | Re-ejecutado sobre el mismo tree |
+| 2026-08-03 | D-012 `4d97449`: `ToolExecutor` deny-by-default + `/agents/tools/invoke` | 10 evals passed (allowlist, desconocida/prohibida, matriz cruzada, argumentos/IVA, inyección, viewer, auditoría) | Las herramientas solo se ejecutan por el endpoint gobernado; `/agents/run` no ejecuta herramientas aunque el prompt lo pida |
+| 2026-08-03 | Corpus combinado tras D-012, env limpio | 169 passed; 15,70 s | Regresión completa verde con los evals nuevos |
+| 2026-08-03 | Ruff focalizado `E9,F,I` + archivos nuevos al completo | Verde | Deuda de estilo histórica de `main.py` permanece registrada (D-030) |
 
 El conteo coincide con el corpus documentado: 136 tests en `tests/` + 23 en `bridge-api/tests`. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
 

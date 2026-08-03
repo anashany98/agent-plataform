@@ -6,6 +6,7 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 
 ### Added
 
+- Executor de herramientas deny-by-default (`ToolExecutor`, `/agents/tools/invoke`, `GET /agents/{id}/tools`): allowlist estricta por agente contra un catálogo cerrado, validación de argumentos, herramientas financieras prohibidas para agentes y auditoría de cada decisión (`4d97449`, D-012).
 - Prompt operativo raíz en `agents.md`.
 - Repositorio Git local y rama `production-remediation`.
 - Punto de recuperación pre-remediación `ed77056`.
@@ -39,6 +40,7 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 
 ### Security
 
+- Los agentes ya no pueden ejecutar herramientas fuera de su allowlist; la inyección de instrucciones por `/agents/run` no ejecuta herramientas, los argumentos no declarados (p. ej. `custom_vat_rate`) se rechazan y los roles viewer no pueden invocar (`4d97449`).
 - Se comprobó que `.env` permanece ignorado por Git.
 - El escaneo de patrones de secretos previo al recovery commit no detectó coincidencias de alta señal en código propio.
 - `.env` continúa ignorado/no trazado y el escaneo P0 no detectó patrones de secreto de alta señal.
