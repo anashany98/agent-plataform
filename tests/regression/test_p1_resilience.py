@@ -622,9 +622,17 @@ def test_webhook_ghl_outage_queues_lead_and_outbox_recovers(
         calls["note"] += 1
         return {"id": "note-res-1"}
 
+    async def no_existing_opportunity(**_kwargs: Any) -> None:
+        return None
+
+    async def no_existing_note(_contact_id: str, _body: str) -> None:
+        return None
+
     monkeypatch.setattr(bridge_main.ghl_adapter, "upsert_contact", upsert_ok)
     monkeypatch.setattr(bridge_main.ghl_adapter, "create_opportunity", opportunity_ok)
     monkeypatch.setattr(bridge_main.ghl_adapter, "add_note", note_ok)
+    monkeypatch.setattr(bridge_main.ghl_adapter, "find_opportunity_by_reference", no_existing_opportunity)
+    monkeypatch.setattr(bridge_main.ghl_adapter, "find_note_by_body", no_existing_note)
 
     response = isolated_api.client.post("/outbox/process")
     assert response.status_code == 200, response.text
@@ -674,9 +682,13 @@ def test_outbox_checkpoint_prevents_duplicate_opportunity(
     async def note_down(_contact_id: str, _note_body: str) -> dict[str, Any]:
         raise GHLIntegrationError("avería inyectada en la nota")
 
+    async def no_existing_opportunity(**_kwargs: Any) -> None:
+        return None
+
     monkeypatch.setattr(bridge_main.ghl_adapter, "upsert_contact", upsert_ok)
     monkeypatch.setattr(bridge_main.ghl_adapter, "create_opportunity", opportunity_ok)
     monkeypatch.setattr(bridge_main.ghl_adapter, "add_note", note_down)
+    monkeypatch.setattr(bridge_main.ghl_adapter, "find_opportunity_by_reference", no_existing_opportunity)
 
     suffix = uuid.uuid4().hex
     payload = _webhook_payload(suffix, f"lead-chk-{suffix[:10]}@example.com")
@@ -702,7 +714,11 @@ def test_outbox_checkpoint_prevents_duplicate_opportunity(
         notes.append(contact_id)
         return {"id": "note-b"}
 
+    async def no_existing_note(_contact_id: str, _body: str) -> None:
+        return None
+
     monkeypatch.setattr(bridge_main.ghl_adapter, "add_note", note_ok)
+    monkeypatch.setattr(bridge_main.ghl_adapter, "find_note_by_body", no_existing_note)
 
     response = isolated_api.client.post("/outbox/process")
     assert response.status_code == 200, response.text

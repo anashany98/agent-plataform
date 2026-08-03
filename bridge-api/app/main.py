@@ -792,9 +792,10 @@ async def _dispatch_ghl_lead_capture(message: OutboxMessage) -> Dict[str, Any]:
     """Captura un lead en GHL con checkpoints durables en el outbox.
 
     Cada efecto externo se checkpointea en ``message.payload`` antes de pasar
-    al siguiente, de modo que un crash repite como mucho el último paso no
-    confirmado. La deduplicación en el propio proveedor queda bloqueada en
-    D-010 hasta que GHL acepte claves de idempotencia verificables.
+    al siguiente. Como GHL no acepta claves de idempotencia, la microventana
+    efecto→checkpoint se cierra con reconciliación previa al efecto (D-010):
+    si el efecto ya existe en el proveedor se reutiliza en lugar de crearlo.
+    Una reconciliación fallida falla cerrada: nunca se crea a ciegas.
     """
 
     db = object_session(message)
@@ -803,12 +804,18 @@ async def _dispatch_ghl_lead_capture(message: OutboxMessage) -> Dict[str, Any]:
     payload = dict(message.payload or {})
     checkpoint = dict(payload.get("checkpoint") or {})
     contact_id = str(checkpoint.get("contact_id") or "")
+    reconciled: list = list(checkpoint.get("reconciled") or [])
+    external_id = str(payload.get("external_id") or "").strip()
     try:
         if not ghl_adapter.configured():
             raise OutboxPermanentError("GHL no está configurado")
         email = str(payload.get("email") or "").strip()
         if not email or email.endswith("@invalid.local"):
             raise OutboxPermanentError("El lead no tiene datos de contacto válidos")
+        if not external_id:
+            raise OutboxPermanentError(
+                "El lead no tiene referencia externa y no puede reconciliarse"
+            )
         if not contact_id:
             contact_response = await ghl_adapter.upsert_contact(
                 email=email,
@@ -824,28 +831,57 @@ async def _dispatch_ghl_lead_capture(message: OutboxMessage) -> Dict[str, Any]:
                 message, payload, {**checkpoint, "contact_id": contact_id}
             )
         if not checkpoint.get("opportunity"):
-            opportunity = await ghl_adapter.create_opportunity(
-                contact_id=contact_id,
-                name=str(payload.get("opportunity_name") or ""),
-                monetary_value=float(payload.get("monetary_value") or 0.0),
-                external_id=str(payload.get("external_id") or ""),
+            existing = await ghl_adapter.find_opportunity_by_reference(
+                contact_id=contact_id, external_id=external_id
             )
+            if existing is not None:
+                opportunity = existing
+                reconciled.append("opportunity")
+            else:
+                opportunity = await ghl_adapter.create_opportunity(
+                    contact_id=contact_id,
+                    name=str(payload.get("opportunity_name") or ""),
+                    monetary_value=float(payload.get("monetary_value") or 0.0),
+                    external_id=external_id,
+                )
             checkpoint = _commit_ghl_checkpoint(
-                message, payload, {**checkpoint, "opportunity": opportunity}
+                message,
+                payload,
+                {**checkpoint, "opportunity": opportunity, "reconciled": list(reconciled)},
             )
-        if payload.get("note") and not checkpoint.get("note_completed"):
-            await ghl_adapter.add_note(contact_id, str(payload["note"]))
+        note_body = str(payload.get("note") or "")
+        if note_body and not checkpoint.get("note_completed"):
+            existing_note = await ghl_adapter.find_note_by_body(contact_id, note_body)
+            if existing_note is None:
+                await ghl_adapter.add_note(contact_id, note_body)
+            else:
+                reconciled.append("note")
             checkpoint = _commit_ghl_checkpoint(
-                message, payload, {**checkpoint, "note_completed": True}
+                message,
+                payload,
+                {**checkpoint, "note_completed": True, "reconciled": list(reconciled)},
             )
     except OutboxPermanentError:
         raise
     except (GHLIntegrationError, CircuitOpenError) as exc:
         raise OutboxTransientError(str(exc)) from exc
+    if reconciled:
+        _audit(
+            db,
+            event_type="ghl_lead_reconciled",
+            status_value="success",
+            details={
+                "outbox_id": message.id,
+                "external_id": external_id,
+                "contact_id": contact_id,
+                "reconciled": list(reconciled),
+            },
+        )
     return {
         "status": "success",
         "contact_id": contact_id,
         "opportunity": checkpoint.get("opportunity"),
+        "reconciled": list(reconciled),
     }
 
 
@@ -1894,6 +1930,7 @@ async def create_ghl_lead(req: LeadRequest, principal: Principal = Depends(requi
         raise HTTPException(status_code=503, detail="No se pudo adquirir el lease del lead")
     claim_owner = record.owner_id
     checkpoint = dict(record.response_body or {})
+    reconciled: list = list(checkpoint.get("reconciled") or [])
     try:
         contact_id = str(checkpoint.get("contact_id") or "")
         if not contact_id:
@@ -1913,29 +1950,53 @@ async def create_ghl_lead(req: LeadRequest, principal: Principal = Depends(requi
 
         opportunity = checkpoint.get("opportunity")
         if not opportunity:
-            opportunity = await ghl_adapter.create_opportunity(
-                contact_id=contact_id,
-                name=req.opportunity_name,
-                monetary_value=req.monetary_value,
-                external_id=req.external_id,
+            # GHL no acepta claves de idempotencia: reconciliación previa al
+            # efecto para cerrar la microventana efecto→checkpoint (D-010).
+            existing = await ghl_adapter.find_opportunity_by_reference(
+                contact_id=contact_id, external_id=req.external_id
             )
+            if existing is not None:
+                opportunity = existing
+                reconciled.append("opportunity")
+            else:
+                opportunity = await ghl_adapter.create_opportunity(
+                    contact_id=contact_id,
+                    name=req.opportunity_name,
+                    monetary_value=req.monetary_value,
+                    external_id=req.external_id,
+                )
             checkpoint["opportunity"] = opportunity
+            checkpoint["reconciled"] = list(reconciled)
             _checkpoint_idempotency(db, idempotency_key, claim_owner, checkpoint)
         if req.note and not checkpoint.get("note_completed"):
-            await ghl_adapter.add_note(contact_id, req.note)
+            existing_note = await ghl_adapter.find_note_by_body(contact_id, req.note)
+            if existing_note is None:
+                await ghl_adapter.add_note(contact_id, req.note)
+            else:
+                reconciled.append("note")
             checkpoint["note_completed"] = True
+            checkpoint["reconciled"] = list(reconciled)
             _checkpoint_idempotency(db, idempotency_key, claim_owner, checkpoint)
     except GHLIntegrationError as exc:
         _fail_idempotency(db, idempotency_key, claim_owner, exc, 502)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    result = {"status": "success", "contact_id": contact_id, "opportunity": opportunity}
+    result = {
+        "status": "success",
+        "contact_id": contact_id,
+        "opportunity": opportunity,
+        "reconciled": list(reconciled),
+    }
     try:
         _complete_idempotency(db, idempotency_key, claim_owner, result, commit=False)
         _audit(
             db,
             event_type="ghl_lead",
             status_value="success",
-            details={"external_id": req.external_id, "contact_id": contact_id},
+            details={
+                "external_id": req.external_id,
+                "contact_id": contact_id,
+                "reconciled": list(reconciled),
+            },
             principal=principal,
             commit=False,
         )

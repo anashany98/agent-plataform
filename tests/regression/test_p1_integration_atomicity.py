@@ -8,10 +8,6 @@ import uuid
 from typing import Any
 
 import httpx
-from fastapi import HTTPException
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import sessionmaker
-
 from app import main as bridge_main
 from app.database import Base, SessionLocal
 from app.main import ApprovalDecision, approve_request, reject_request
@@ -20,9 +16,15 @@ from app.security import Principal
 from app.services import activepieces_adapter as activepieces_module
 from app.services import chatwoot_adapter as chatwoot_module
 from app.services import ghl_adapter as ghl_module
-from app.services.activepieces_adapter import ActivepiecesAdapter, ActivepiecesIntegrationError
+from app.services.activepieces_adapter import (
+    ActivepiecesAdapter,
+    ActivepiecesIntegrationError,
+)
 from app.services.chatwoot_adapter import ChatwootAdapter, ChatwootIntegrationError
 from app.services.ghl_adapter import GHLAdapter, GHLIntegrationError
+from fastapi import HTTPException
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
 
 
 def _clean_bridge_records(*, idempotency_key: str, external_id: str | None = None) -> None:
@@ -77,9 +79,17 @@ def test_ghl_failure_after_opportunity_does_not_repeat_external_side_effect(
     async def fail_after_opportunity(_contact_id: str, _body: str):
         raise GHLIntegrationError("fallo inyectado después de crear la oportunidad")
 
+    async def no_existing_opportunity(**_kwargs) -> None:
+        return None
+
+    async def no_existing_note(_contact_id: str, _body: str) -> None:
+        return None
+
     monkeypatch.setattr(bridge_main.ghl_adapter, "upsert_contact", upsert_contact)
     monkeypatch.setattr(bridge_main.ghl_adapter, "create_opportunity", create_opportunity)
     monkeypatch.setattr(bridge_main.ghl_adapter, "add_note", fail_after_opportunity)
+    monkeypatch.setattr(bridge_main.ghl_adapter, "find_opportunity_by_reference", no_existing_opportunity)
+    monkeypatch.setattr(bridge_main.ghl_adapter, "find_note_by_body", no_existing_note)
     payload = {
         "email": f"fault-injection-{uuid.uuid4().hex[:12]}@example.com",
         "first_name": "Fault",
