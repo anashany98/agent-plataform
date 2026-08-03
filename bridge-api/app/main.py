@@ -85,13 +85,102 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Chatwoot-Signature", "X-Chatwoot-Timestamp", "Idempotency-Key"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Chatwoot-Signature",
+        "X-Chatwoot-Timestamp",
+        "X-Correlation-ID",
+        "X-Request-ID",
+        "Idempotency-Key",
+    ],
+    expose_headers=["X-Correlation-ID", "X-Request-ID"],
 )
+
+
+@app.middleware("http")
+async def _observability_middleware(request, call_next):  # noqa: ANN001
+    """Propaga correlación, tenant y usuario; emite access log estructurado."""
+
+    from app.services import observability
+    from app.services.observability import (
+        CORRELATION_ID,
+        REQUEST_ID,
+        TENANT_ID,
+        USER_ID,
+        HTTP_LATENCY,
+        HTTP_REQUESTS,
+        log_event,
+        new_correlation_id,
+        record_latency,
+        record_metric,
+        request_context,
+    )
+
+    correlation_id = request.headers.get("X-Correlation-ID") or new_correlation_id()
+    request_id = request.headers.get("X-Request-ID") or new_correlation_id()
+    tenant_id = request.headers.get("X-Tenant-ID")
+    user_id = request.headers.get("X-User-ID")
+    route = request.url.path
+    method = request.method
+    started = time.perf_counter()
+    try:
+        with request_context(
+            correlation_id=correlation_id,
+            request_id=request_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            route=route,
+            method=method,
+        ):
+            response = await call_next(request)
+    except Exception as exc:
+        elapsed = (time.perf_counter() - started) * 1000
+        record_metric(HTTP_REQUESTS, method=method, route=route, status="500")
+        record_latency(HTTP_LATENCY, (time.perf_counter() - started), method=method, route=route)
+        log_event(
+            "ERROR",
+            "request.error",
+            route=route,
+            method=method,
+            status_code=500,
+            latency_ms=round(elapsed, 2),
+            error_type=type(exc).__name__,
+        )
+        raise
+    elapsed = (time.perf_counter() - started) * 1000
+    response.headers["X-Correlation-ID"] = correlation_id
+    response.headers["X-Request-ID"] = request_id
+    record_metric(HTTP_REQUESTS, method=method, route=route, status=str(response.status_code))
+    record_latency(HTTP_LATENCY, (time.perf_counter() - started), method=method, route=route)
+    log_event(
+        "INFO",
+        "request.completed",
+        route=route,
+        method=method,
+        status_code=response.status_code,
+        latency_ms=round(elapsed, 2),
+        tenant_id=tenant_id,
+        user_id=user_id,
+        correlation_id=correlation_id,
+        request_id=request_id,
+    )
+    return response
+
 
 chatwoot_adapter = ChatwootAdapter()
 prestashop_adapter = PrestaShopAdapter()
 ghl_adapter = GHLAdapter()
 activepieces_adapter = ActivepiecesAdapter()
+
+
+# ---------------------------------------------------------------------------
+# Arranque: configurar logging JSON una sola vez al importar el módulo.
+# ---------------------------------------------------------------------------
+
+from app.services.observability import configure_logging  # noqa: E402
+
+configure_logging(settings.LOG_LEVEL.upper() if hasattr(settings, "LOG_LEVEL") else "INFO")
 
 
 class LoginRequest(BaseModel):
@@ -758,12 +847,45 @@ def get_ready(db: Session = Depends(get_db)):
 
 @app.get("/metrics", tags=["Sistema"])
 def get_metrics(_: Principal = Depends(require_roles(*ADMIN_ROLES)), db: Session = Depends(get_db)):
+    """Métricas operativas: contadores, estado de outbox y circuit breakers.
+
+    Las alertas D-028 se evalúan en cada llamada para garantizar que
+    cualquier operador que monitorice el endpoint vea el estado
+    inmediato de los proveedores y de la cola durable.
+    """
+
+    from app.services.observability import (
+        evaluate_breaker_rule,
+        evaluate_outbox_rule,
+        get_alert_sink,
+    )
+
+    outbox_counts = OutboxService(db).counts()
+    breakers = all_breaker_states()
+    breaker_alerts = evaluate_breaker_rule(breakers)
+    outbox_alerts = evaluate_outbox_rule(outbox_counts)
     return {
         "audit_logs_count": db.query(AuditLog).count(),
         "total_approvals": db.query(ApprovalRequest).count(),
         "pending_approvals": db.query(ApprovalRequest).filter(ApprovalRequest.status == "pending").count(),
-        "outbox": OutboxService(db).counts(),
-        "circuit_breakers": all_breaker_states(),
+        "outbox": outbox_counts,
+        "circuit_breakers": breakers,
+        "alerts": {
+            "recent": [
+                {
+                    "rule_id": event.rule_id,
+                    "summary": event.summary,
+                    "severity": event.severity,
+                    "details": event.details,
+                }
+                for event in get_alert_sink().events[-20:]
+            ],
+            "open_count": len([event for event in get_alert_sink().events if event.severity == "critical"]),
+            "evaluated": {
+                "circuit_breaker_open": [event.summary for event in breaker_alerts],
+                "outbox_dead_letter_growth": [event.summary for event in outbox_alerts],
+            },
+        },
     }
 
 
