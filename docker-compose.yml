@@ -78,8 +78,15 @@ services:
     cap_add:
       - CHOWN
       - SETGID
+      - SETUID
     cap_drop:
       - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 128M
+          pids: 64
 
   portal:
     profiles: ["core", "full"]
@@ -107,6 +114,12 @@ services:
       - SETGID
     cap_drop:
       - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+          pids: 64
 
   bridge-db:
     profiles: ["core", "full"]
@@ -127,6 +140,12 @@ services:
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
+          pids: 128
 
   bridge-redis:
     profiles: ["core", "full"]
@@ -146,6 +165,12 @@ services:
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 128M
+          pids: 64
 
   bridge-api:
     profiles: ["core", "full"]
@@ -252,6 +277,12 @@ services:
     tmpfs: [/tmp]
     logging: *default-logging
     <<: *default-security
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 768M
+          pids: 128
 
   flowwink-app:
     profiles: ["core", "full"]
