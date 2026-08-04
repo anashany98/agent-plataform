@@ -1992,8 +1992,15 @@ async def import_data_file(
     return result
 
 
-@app.get("/api/bridge/agents", tags=["Agentes"])
+@app.get("/agents", tags=["Agentes"])
+@app.get("/api/bridge/agents", tags=["Agentes"], include_in_schema=False)
 def list_agents(_: Principal = Depends(require_roles(*READ_ROLES))):
+    """Listado de agentes registrados.
+
+    La ruta canónica es ``/agents``; el alias ``/api/bridge/agents`` cubre
+    el acceso directo sin el strip de prefijo del proxy.
+    """
+
     return {"status": "success", "agents": list(AGENT_REGISTRY.values())}
 
 

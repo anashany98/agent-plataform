@@ -47,3 +47,4 @@ Thumbs.db
 clients/*/backups/
 clients/*/documents/private/
 clients/*/imports/private/
+.dev/
