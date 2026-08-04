@@ -121,9 +121,12 @@ Acción de entorno autorizada por el propietario (`DECISIONS.md` D-008): el 2026
 | 2026-08-03 | Migraciones herméticas actualizadas a head `0005` | 23 passed | Clean, histórica, downgrade/reupgrade y reserva activa conservadas con la tabla `installation_lifecycle` |
 | 2026-08-03 | D-026/D-027 `33d77c1`: portal con secciones reales (cinco anchors rotos corregidos), runner vitest + testing-library + vitest-axe y claims de documentación corregidos | 5 evals frontend passed (login accesible con error del servidor, cada ancla con destino renderizado, secciones con datos reales, error explícito sin permisos, aprobaciones decidibles + axe) y 1 eval backend (listado `GET /rag/documents` sin rutas de disco ni contenido) | `npm run typecheck`, `npm run build` y `npm run test` verdes; ningún anchor sin destino; los módulos muestran datos reales o estados vacío/error explícitos |
 | 2026-08-03 | Corpus combinado tras D-026/D-027, env limpio, orden `tests bridge-api/tests` | 229 passed; 63,32 s | Regresión completa verde con el eval del listado de documentos |
-| 2026-08-03 | Ruff focalizado `E9,F,I` + archivos nuevos al completo | Verde | Deuda de estilo histórica de `main.py` permanece registrada (D-030); `ghl_adapter.py`, `rag_security.py`, `audit_dependencies.py`, `observability.py` y `lifecycle.py` limpios al completo; imports muertos del middleware D-028 eliminados en `ff0eed8` |
+| 2026-08-03 | D-030 `ca73a6c`: `scripts/quality_gates.py` con tres puertas (`ruff-hard` E9,F a 0, `ruff-clean-zone` a 0, `ruff-ratchet` con baseline visible de 213 por regla en `scripts/quality_baseline.json`) y deuda de estilo en tests legacy corregida | 6 evals passed (gates verdes en el árbol, trinquete bloquea crecimiento con baseline bajo, baseline cuadrado con desglose, nombres de gate estables) | Los gates pasan en el árbol actual; el trinquete falla si la deuda legacy supera el baseline; la deuda permanece visible y documentada |
+| 2026-08-03 | Corpus combinado tras D-030, env limpio, orden `tests bridge-api/tests` | 235 passed; 78,88 s | Regresión completa verde con los evals de quality gates |
+| 2026-08-03 | Corpus combinado tras D-030, env limpio, orden inverso `bridge-api/tests tests` | 235 passed; 70,65 s | Sin dependencia del orden de colección |
+| 2026-08-03 | Ruff focalizado + quality gates | Verde | `scripts/quality_gates.py` ejecutable y verde; `ghl_adapter.py`, `rag_security.py`, `audit_dependencies.py`, `observability.py`, `lifecycle.py` y todos los tests limpios al completo; imports muertos del middleware D-028 eliminados en `ff0eed8` |
 
-El conteo coincide con el corpus documentado: 206 tests en `tests/` + 23 en `bridge-api/tests` = 229. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
+El conteo coincide con el corpus documentado: 212 tests en `tests/` + 23 en `bridge-api/tests` = 235. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
 
 ## Próxima evidencia obligatoria — P1 restante de Fase 2
 
@@ -132,6 +135,7 @@ El conteo coincide con el corpus documentado: 206 tests en `tests/` + 23 en `bri
 3. SBOM y hashes pin a pin por release; las dependencias están verificadas (D-017, `7fb4f45`).
 4. OTel/Prometheus scrape y SLO formales en runtime; la instrumentación, alertas y redacción de secretos están verificadas (D-028, `af53b8b`).
 5. Revisión legal de la política de retención (B-008); el export/erase con retención y legal hold está verificado (D-029, `ff0eed8`); la inclusión de backups en el borrado queda para D-015.
-6. Egress, proxy, Chatwoot, perfiles y límites verificados en runtime seguro.
-7. Backup/restore en instalación vacía y release/rollback trazable.
-8. Licencias y pruebas E2E/UI.
+6. CI formal y modularización por dominio; los quality gates con trinquete están verificados (D-030, `ca73a6c`).
+7. Egress, proxy, Chatwoot, perfiles y límites verificados en runtime seguro.
+8. Backup/restore en instalación vacía y release/rollback trazable.
+9. Licencias y pruebas E2E/UI.

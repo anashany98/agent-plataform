@@ -15,6 +15,7 @@
 **Commit observabilidad (D-028):** `af53b8b`
 **Commit lifecycle (D-029):** `ff0eed8`
 **Commit portal/docs (D-026/D-027):** `33d77c1`
+**Commit quality gates (D-030):** `ca73a6c`
 **Fase activa:** Fase 2 — Wave 1 de P1/P2 corregibles sin runtime (P0 cerrados)
 **Ruta aprobada:** Ruta A — candidata core con limitaciones documentadas (`DECISIONS.md` D-007)
 **Decisión:** **NOT PRODUCTION READY — CRITICAL RISK**
@@ -39,8 +40,9 @@
 - El 2026-08-03 se cerró D-028 con `af53b8b`: middleware FastAPI con logs JSON correlacionados (correlation_id/request_id/tenant_id/user_id/route/method/status/latency_ms), contextvars por proceso con restauración robusta, helpers `log_event` y `record_metric` con redacción determinista (password/secret/token/bearer/private_key/JWT/sk_live/tarjeta/clave privada), métricas Prometheus para HTTP/outbox/breaker/RAG/alerts y reglas in-memory (`circuit_breaker_open`, `outbox_dead_letter_growth`, `rag_abstention_rate`, `dlp_findings`) integradas en `/metrics` con `recent` y `evaluated`; 10 evals nuevos y corpus combinado 222/222 en ambos órdenes de colección.
 - El 2026-08-03 se cerró D-029 con `ff0eed8`: `LifecycleService` con export JSON portable de datos operativos (sin users ni AuditLog), erase con retención configurable e inmediata, proceso de borrados vencidos y legal hold que bloquea cualquier erase mientras está activo; borrado en orden FK con eliminación de archivos RAG dentro del directorio de subidas; modelo `InstallationLifecycle` + migración aditiva `0005`; endpoints `/lifecycle/*` con `ADMIN_ROLES` y auditoría completa; 6 evals nuevos y corpus combinado 228/228 en ambos órdenes de colección. Residual: revisión legal de la política de retención (B-008).
 - El 2026-08-03 se cerraron D-026/D-027 con `33d77c1`: README reescrito contra la fuente autoritativa y banners SUPERSEDED en `REMEDIATION_REPORT`, `MASTER_PLATFORM_REPORT`, `FINAL_REPORT` y `COMMERCIAL_READINESS_REPORT`; la navegación del portal deja de prometer módulos fantasma (cinco anchors rotos) con secciones reales respaldadas por `GET /tools/products`, nuevo `GET /rag/documents`, `GET /agents` y `GET /users`; runner frontend vitest + testing-library + vitest-axe con 5 evals verdes; 1 eval backend nuevo y corpus combinado 229/229. Residual: E2E visual en viewports acordados (Fase 19).
+- El 2026-08-03 se cerró D-030 con `ca73a6c`: `scripts/quality_gates.py` con tres puertas (`ruff-hard` E9,F a 0, `ruff-clean-zone` a 0 y `ruff-ratchet` con baseline visible de 213 en `scripts/quality_baseline.json`), B008 excluido globalmente por el patrón `Depends()` de FastAPI, deuda de estilo en tests legacy corregida; 6 evals nuevos y corpus combinado 235/235 en ambos órdenes de colección. Con este cierre la Wave 1 (defectos corregibles sin runtime) queda agotada; los P1 restantes requieren runtime/Docker o decisión del propietario.
 - El 2026-08-03, con autorización del propietario, se detuvieron los tres compose projects del workspace antiguo (`agent-platform`, `agent-piloto-rc1`, `agent-cliente-demo-es-staging`); volúmenes intactos y puerto 9000 liberado. La memoria de la VM Docker queda pendiente de liberación/medición (B-001 mitigado).
-- Permanecen 11 P1 y 1 P2 no verificados; no existe candidata de release ni evidencia E2E/live suficiente.
+- Permanecen 11 P1 y 0 P2 no verificados; no existe candidata de release ni evidencia E2E/live suficiente.
 - El build del portal fue reproducido anteriormente; la UX dinámica permanece sin validar.
 
 ## Stop-ship abiertos tras el cierre P0
@@ -57,7 +59,7 @@
 |---|---|---|
 | 0 — Baseline | VERIFIED | Cuatro documentos completos; topología, estados, enlaces y Compose contrastados sin arrancar servicios |
 | 1 — Reproducción | VERIFIED | 19 tests rojos; registros de defectos/riesgos/evidencia; 32 defectos contrastados |
-| 2 — P0/P1 | IN PROGRESS | Seis P0, quince P1 y cuatro P2 `VERIFIED`; quedan 11 P1 y 1 P2 no verificados, varios con remediación parcial |
+| 2 — P0/P1 | IN PROGRESS | Seis P0, quince P1 y cinco P2 `VERIFIED`; quedan 11 P1 no verificados, todos de runtime/bloqueados (Docker, restore, handoff live, release/perfiles, alcance/legal) |
 | 3–29 | BLOCKED | Orden obligatorio; dependen de P0/P1 y core estable |
 | Release | BLOCKED | No se cumplen gates de producción |
 
