@@ -42,11 +42,13 @@ os.environ.update(
     }
 )
 
-import pytest
-from app.database import SessionLocal
-from app.main import app
-from app.models.models import Customer, Pricelist, Product
-from fastapi.testclient import TestClient
+# Los imports van después de fijar las variables de entorno: el harness
+# hermético (D-032) exige que los tests no dependan del entorno del operador.
+import pytest  # noqa: E402
+from app.database import SessionLocal  # noqa: E402
+from app.main import app  # noqa: E402
+from app.models.models import Customer, Pricelist, Product  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

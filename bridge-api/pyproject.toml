@@ -22,4 +22,8 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
-ignore = ["E501"]
+# E501: longitud de línea (los archivos legacy superan 120 en firmas largas).
+# B008: llamadas en argumentos por defecto — patrón estándar de FastAPI
+#       (`Depends(...)`, `Query(...)`); se excluyó explícitamente en el
+#       bloque P1 de invariantes y se mantiene por consenso de proyecto.
+ignore = ["E501", "B008"]

@@ -103,7 +103,8 @@ def test_stale_processing_idempotency_claim_can_be_recovered():
         assert record is not None and record.status_code == 102
     finally:
         db.query(IdempotencyRecord).filter(IdempotencyRecord.idempotency_key == key).delete()
-        db.commit(); db.close()
+        db.commit()
+        db.close()
 
 
 def test_prestashop_contract_normalizes_localized_products(monkeypatch):
@@ -111,7 +112,8 @@ def test_prestashop_contract_normalizes_localized_products(monkeypatch):
     adapter.country_id = adapter.fiscal_country_id = "0"
     adapter.currency_id = "0"
     async def fake_get(resource, params):
-        if resource == 'stock_availables': return {'stock_availables': [{'quantity': '7'}]}
+        if resource == 'stock_availables':
+            return {'stock_availables': [{'quantity': '7'}]}
         return {'products': [{'id': 42, 'reference': 'OF-42', 'name': {'language': [{'value': 'Silla Ergo'}]}, 'description_short': 'Ergonómica', 'price': '199.95', 'id_category_default': 3, 'active': 1, 'show_price': 1, 'available_for_order': 1}]}
     monkeypatch.setattr(adapter, '_get', fake_get)
     products = asyncio.run(adapter.search_products('silla'))
@@ -122,10 +124,12 @@ def test_prestashop_contract_normalizes_localized_products(monkeypatch):
 
 
 def test_ghl_contract_includes_location_and_external_reference(monkeypatch):
-    adapter = GHLAdapter(); adapter.location_id = 'loc-1'
+    adapter = GHLAdapter()
+    adapter.location_id = 'loc-1'
     calls = []
     async def fake_request(method, path, **kwargs):
-        calls.append((method, path, kwargs)); return {'id': 'ok'}
+        calls.append((method, path, kwargs))
+        return {'id': 'ok'}
     monkeypatch.setattr(adapter, '_request', fake_request)
     asyncio.run(adapter.upsert_contact(email='a@example.com', first_name='Ana'))
     monkeypatch.setattr('app.services.ghl_adapter.settings.GHL_PIPELINE_ID', 'pipe-1')
@@ -136,7 +140,8 @@ def test_ghl_contract_includes_location_and_external_reference(monkeypatch):
 
 
 def test_activepieces_contract_normalizes_webhook_path(monkeypatch):
-    adapter = ActivepiecesAdapter(); captured = {}
+    adapter = ActivepiecesAdapter()
+    captured = {}
     class Response:
         content = b'{"executionId":"exec-1"}'
         status_code = 200
@@ -145,7 +150,9 @@ def test_activepieces_contract_normalizes_webhook_path(monkeypatch):
     class Client:
         async def __aenter__(self): return self
         async def __aexit__(self, *args): return None
-        async def post(self, url, **kwargs): captured['url'] = url; return Response()
+        async def post(self, url, **kwargs):
+            captured['url'] = url
+            return Response()
     monkeypatch.setattr('app.services.activepieces_adapter.httpx.AsyncClient', lambda **kwargs: Client())
     result = asyncio.run(adapter.trigger_webhook('flow-test', {'x': 1}))
     assert captured['url'].endswith('/flow-test')

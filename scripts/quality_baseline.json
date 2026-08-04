@@ -1,0 +1,13 @@
+{
+  "updated_at": "2026-08-03",
+  "commit": "20fcfed",
+  "legacy_zone_ruff_full": 213,
+  "notes": "Deuda ruff (reglas E,F,I,B,UP sin E501/B008) en la zona legacy de bridge-api/app. El gate de trinquete prohíbe superarla; al reducirla se actualiza este archivo con scripts/quality_gates.py --update-baseline. La zona limpia (rag_security, observability, lifecycle, audit_dependencies, quality_gates y todos los tests) debe permanecer en 0.",
+  "by_rule": {
+    "UP006": 147,
+    "UP007": 43,
+    "UP035": 19,
+    "I001": 2,
+    "UP017": 2
+  }
+}
