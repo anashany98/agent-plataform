@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import or_, text, update
 from sqlalchemy.exc import IntegrityError
@@ -1624,6 +1624,43 @@ def lifecycle_process_due_erases(
     # instalaciones pendientes del lote.
     service = LifecycleService(db, installation_id=principal.installation_id)
     return {"processed": service.process_due_erases(actor=principal.username)}
+
+
+# ---------------------------------------------------------------------------
+# D-012: automatizaciones portadas de FlowWink sin Supabase (lote 1)
+# ---------------------------------------------------------------------------
+
+@app.post("/automations/sweep", tags=["Automatizaciones"])
+def automations_sweep(
+    principal: Principal = Depends(require_roles(*ADMIN_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Sweep pull de automatizaciones (recordatorios de expiración y dunning)."""
+
+    from app.services import automations
+
+    return automations.run_automation_sweep(db, actor=principal.username)
+
+
+@app.get("/automations/invoices/{invoice_id}/pdf", tags=["Automatizaciones"])
+def automation_invoice_pdf(
+    invoice_id: str,
+    _: Principal = Depends(require_roles(*READ_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """PDF determinista y de solo lectura de un borrador de factura."""
+
+    from app.services import automations
+
+    invoice = db.query(InvoiceDraft).filter(InvoiceDraft.id == invoice_id).first()
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Factura no encontrada")
+    pdf = automations.generate_invoice_pdf(invoice)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{invoice.invoice_number}.pdf"'},
+    )
 
 
 @app.get("/tools/products", tags=["Herramientas"])

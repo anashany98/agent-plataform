@@ -126,6 +126,14 @@ class Settings(BaseSettings):
     LIFECYCLE_DEFAULT_RETENTION_DAYS: int = int(os.getenv("LIFECYCLE_DEFAULT_RETENTION_DAYS", "30"))
     LIFECYCLE_MAX_RETENTION_DAYS: int = int(os.getenv("LIFECYCLE_MAX_RETENTION_DAYS", "365"))
 
+    # D-012: automatizaciones portadas de FlowWink sin Supabase. El proveedor
+    # de email por defecto es local (sin red) para mantener todo verificable.
+    EMAIL_PROVIDER: str = os.getenv("EMAIL_PROVIDER", "local")
+    AUTOMATION_EMAIL_DIR: str = os.getenv("AUTOMATION_EMAIL_DIR", "/data/emails")
+    AUTOMATION_QUOTE_EXPIRY_HORIZON_DAYS: int = int(os.getenv("AUTOMATION_QUOTE_EXPIRY_HORIZON_DAYS", "7"))
+    AUTOMATION_DUNNING_OVERDUE_DAYS: int = int(os.getenv("AUTOMATION_DUNNING_OVERDUE_DAYS", "15"))
+    WEBHOOK_OUTBOUND_SECRET: str = os.getenv("WEBHOOK_OUTBOUND_SECRET", "")
+
     COUNTRY: str = os.getenv("COUNTRY", "ES")
     CURRENCY: str = os.getenv("CURRENCY", "EUR")
     DEFAULT_VAT_RATE: float = float(os.getenv("DEFAULT_VAT_RATE", "0.21"))
