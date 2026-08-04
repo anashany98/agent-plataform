@@ -1663,6 +1663,26 @@ def automation_invoice_pdf(
     )
 
 
+@app.post("/agents/docs-chat", tags=["Agentes"])
+async def agents_docs_chat(
+    req: RAGQueryRequest,
+    principal: Principal = Depends(require_roles(*READ_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Chat documental sobre el RAG del Bridge (port de FlowWink ``docs-chat``).
+
+    Respeta la ACL por rol, se abstiene sin evidencia y devuelve citas
+    verificables. Sin proveedor LLM real, responde de forma extractiva
+    (honesta) con los fragmentos recuperados.
+    """
+
+    from app.services import agent_ai
+
+    return await agent_ai.docs_chat(
+        db, query=req.query, role=principal.role, top_k=req.top_k, min_score=req.min_score
+    )
+
+
 @app.get("/tools/products", tags=["Herramientas"])
 def get_products_tool(query: str = "", _: Principal = Depends(require_roles(*READ_ROLES)), db: Session = Depends(get_db)):
     return DeterministicToolsService(db).search_products(query)
