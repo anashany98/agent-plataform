@@ -125,8 +125,10 @@ Acción de entorno autorizada por el propietario (`DECISIONS.md` D-008): el 2026
 | 2026-08-03 | Corpus combinado tras D-030, env limpio, orden `tests bridge-api/tests` | 235 passed; 78,88 s | Regresión completa verde con los evals de quality gates |
 | 2026-08-03 | Corpus combinado tras D-030, env limpio, orden inverso `bridge-api/tests tests` | 235 passed; 70,65 s | Sin dependencia del orden de colección |
 | 2026-08-03 | Ruff focalizado + quality gates | Verde | `scripts/quality_gates.py` ejecutable y verde; `ghl_adapter.py`, `rag_security.py`, `audit_dependencies.py`, `observability.py`, `lifecycle.py` y todos los tests limpios al completo; imports muertos del middleware D-028 eliminados en `ff0eed8` |
+| 2026-08-04 | D-012 `bf647cf` (lote 1): motor de automatizaciones FlowWink sin Supabase — router de email local (sin red), `quote-expiry-reminders` idempotente por ventana, `dunning-processor` sin mutar importes, `generate-invoice-pdf` determinista, `send-webhook` firmado HMAC, sweep pull; endpoints `/automations/sweep` y `/automations/invoices/{id}/pdf` | 7 evals passed (quote-expiry idempotente, dunning marca overdue sin mutar totales, PDF válido/determinista/con nº de factura, firma HMAC coincide, email local auditado sin red, sweep agregado) | Funcionalidad nueva (T-015), no cierra defectos; respeta idempotencia, auditoría y sin efecto financiero sin aprobación; `automations.py` en zona limpia del gate D-030 |
+| 2026-08-04 | Corpus combinado tras D-012 lote 1, env limpio, orden `tests bridge-api/tests` | 242 passed; 70,10 s | Regresión completa verde con los evals de automatizaciones |
 
-El conteo coincide con el corpus documentado: 212 tests en `tests/` + 23 en `bridge-api/tests` = 235. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
+El conteo coincide con el corpus documentado: 219 tests en `tests/` + 23 en `bridge-api/tests` = 242. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
 
 ## Próxima evidencia obligatoria — P1 restante de Fase 2
 
