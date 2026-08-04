@@ -130,8 +130,10 @@ Acción de entorno autorizada por el propietario (`DECISIONS.md` D-008): el 2026
 | 2026-08-04 | D-012 `59558a1` (lote 2): `docs-chat` de FlowWink sobre el RAG del Bridge — ACL por rol, abstención sin evidencia, citas verificables, respuesta extractiva honesta sin LLM real | 3 evals passed (extractivo con citas, abstención por ACL `confidential` denegada a viewer, abstención por consulta irrelevante con `min_score`) | Sin LLM real responde extractivo y honesto (nunca simulado disfrazado); sin ACL o sin evidencia se abstiene |
 | 2026-08-04 | Corpus combinado tras D-012 lote 2, env limpio, orden `tests bridge-api/tests` | 245 passed; 70,61 s | Regresión completa verde con los evals de agent-ai |
 | 2026-08-04 | Corpus combinado tras D-012 lote 2, env limpio, orden inverso `bridge-api/tests tests` | 245 passed; 65,14 s | Sin dependencia del orden de colección |
+| 2026-08-04 | D-015/D-016 `6b34200`: backup/restore/rollback verificables — manifiesto con conteos+sha256, `restore_backup` a motor vacío, `verify_backup`, `rollback_installation` | 4 evals passed (roundtrip SQLite restaura y verifica, detección de corrupción, rollback recupera presupuesto borrado y revierte mutación, roundtrip PostgreSQL efímero con extension vector) | Restauración REAL (no simulada): los datos respaldados se recuperan en un motor vacío y se verifican conteos y checksums; el rollback de una instalación no toca al resto |
+| 2026-08-04 | Corpus combinado tras D-015/D-016, env limpio, orden `tests bridge-api/tests` | 248 passed, 1 skipped (postgres opt-in); 72,96 s | Regresión completa verde con los evals de backup/rollback |
 
-El conteo coincide con el corpus documentado: 222 tests en `tests/` + 23 en `bridge-api/tests` = 245. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
+El conteo coincide con el corpus documentado: 225 tests en `tests/` + 23 en `bridge-api/tests` = 248. La reverificación no arrancó servicios del proyecto ni contactó proveedores externos; el eval de PostgreSQL es opt-in (`RUN_POSTGRES_BACKUP=1`) y se ejecutó con un contenedor efímero que se eliminó al terminar. El estado sigue siendo `NOT PRODUCTION READY — CRITICAL RISK`.
 
 ## Próxima evidencia obligatoria — P1 restante de Fase 2
 

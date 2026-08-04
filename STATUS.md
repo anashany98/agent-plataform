@@ -18,6 +18,7 @@
 **Commit quality gates (D-030):** `ca73a6c`
 **Commit automatizaciones FlowWink lote 1 (D-012):** `bf647cf`
 **Commit Agentes/IA FlowWink lote 2 (D-012):** `59558a1`
+**Commit backup/restore/rollback (D-015/D-016):** `6b34200`
 **Fase activa:** Fase 3 — extracción de automatizaciones FlowWink sin Supabase (Wave 1 de P1/P2 agotada)
 **Ruta aprobada:** Ruta A — candidata core con limitaciones documentadas (`DECISIONS.md` D-007)
 **Decisión:** **NOT PRODUCTION READY — CRITICAL RISK**
@@ -44,9 +45,10 @@
 - El 2026-08-03 se cerraron D-026/D-027 con `33d77c1`: README reescrito contra la fuente autoritativa y banners SUPERSEDED en `REMEDIATION_REPORT`, `MASTER_PLATFORM_REPORT`, `FINAL_REPORT` y `COMMERCIAL_READINESS_REPORT`; la navegación del portal deja de prometer módulos fantasma (cinco anchors rotos) con secciones reales respaldadas por `GET /tools/products`, nuevo `GET /rag/documents`, `GET /agents` y `GET /users`; runner frontend vitest + testing-library + vitest-axe con 5 evals verdes; 1 eval backend nuevo y corpus combinado 229/229. Residual: E2E visual en viewports acordados (Fase 19).
 - El 2026-08-03 se cerró D-030 con `ca73a6c`: `scripts/quality_gates.py` con tres puertas (`ruff-hard` E9,F a 0, `ruff-clean-zone` a 0 y `ruff-ratchet` con baseline visible de 213 en `scripts/quality_baseline.json`), B008 excluido globalmente por el patrón `Depends()` de FastAPI, deuda de estilo en tests legacy corregida; 6 evals nuevos y corpus combinado 235/235 en ambos órdenes de colección. Con este cierre la Wave 1 (defectos corregibles sin runtime) queda agotada; los P1 restantes requieren runtime/Docker o decisión del propietario.
 - El 2026-08-04, tras la decisión D-012 (propietario rechaza Supabase y selecciona extraer 6 dominios de FlowWink al Bridge), se entregó el lote 1 de automatizaciones con `bf647cf`: `app/services/automations.py` con router de email de proveedor local (sin red), `quote-expiry-reminders` idempotente por ventana, `dunning-processor` que solo notifica y marca `overdue` sin mutar importes, `generate-invoice-pdf` determinista de solo lectura, `send-webhook` firmado HMAC sobre circuit breaker y sweep agregado pull; endpoints `/automations/sweep` y `/automations/invoices/{id}/pdf` con roles. 7 evals nuevos; corpus 242/242; `automations.py` entra en la zona limpia del gate D-030. Esto es funcionalidad nueva (T-015), no cierra defectos: los conteos P0/P1/P2 no cambian.
+- El 2026-08-04 se verificaron D-015 y D-016 con `6b34200`: `app/services/backup.py` con `create_backup` (manifiesto con conteos+sha256 por tabla), `restore_backup` a motor vacío y `verify_backup`; **restauración REAL** verificada en SQLite (hermético) y en PostgreSQL efímero (opt-in, contenedor pgvector, dos BDs, extension vector); `rollback_installation` restaura los datos de una instalación a un punto conocido tras una mala release, independiente del resto. 4 evals; corpus 248. Cierra dos P1: quedan 9 abiertos, todos de runtime/bloqueados.
 - El 2026-08-04 se entregó el lote 2 de Agentes/IA con `59558a1`: `app/services/agent_ai.py::docs_chat` (port de `docs-chat` de FlowWink) con búsqueda RAG y ACL por rol, abstención sin evidencia, citas verificables y respuesta extractiva honesta cuando no hay proveedor LLM real (B-006); endpoint `/agents/docs-chat` con roles. 3 evals nuevos; corpus 245/245; `agent_ai.py` en zona limpia del gate D-030. Funcionalidad nueva (T-017), no cambia conteos de defectos.
 - El 2026-08-03, con autorización del propietario, se detuvieron los tres compose projects del workspace antiguo (`agent-platform`, `agent-piloto-rc1`, `agent-cliente-demo-es-staging`); volúmenes intactos y puerto 9000 liberado. La memoria de la VM Docker queda pendiente de liberación/medición (B-001 mitigado).
-- Permanecen 11 P1 y 0 P2 no verificados; no existe candidata de release ni evidencia E2E/live suficiente.
+- Permanecen 9 P1 y 0 P2 no verificados; no existe candidata de release ni evidencia E2E/live suficiente.
 - El build del portal fue reproducido anteriormente; la UX dinámica permanece sin validar.
 
 ## Stop-ship abiertos tras el cierre P0
@@ -63,7 +65,7 @@
 |---|---|---|
 | 0 — Baseline | VERIFIED | Cuatro documentos completos; topología, estados, enlaces y Compose contrastados sin arrancar servicios |
 | 1 — Reproducción | VERIFIED | 19 tests rojos; registros de defectos/riesgos/evidencia; 32 defectos contrastados |
-| 2 — P0/P1 | IN PROGRESS | Seis P0, quince P1 y cinco P2 `VERIFIED`; quedan 11 P1 no verificados, todos de runtime/bloqueados (Docker, restore, handoff live, release/perfiles, alcance/legal) |
+| 2 — P0/P1 | IN PROGRESS | Seis P0, diecisiete P1 y cinco P2 `VERIFIED`; quedan 9 P1 no verificados, todos de runtime/bloqueados (Docker/egress/proxy/puertos/recursos, handoff live, release/perfiles, alcance/legal) |
 | 3–29 | BLOCKED | Orden obligatorio; dependen de P0/P1 y core estable |
 | Release | BLOCKED | No se cumplen gates de producción |
 
