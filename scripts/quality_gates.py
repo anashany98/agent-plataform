@@ -42,6 +42,7 @@ CLEAN_ZONE_FILES = (
     "bridge-api/app/services/lifecycle.py",
     "bridge-api/app/services/automations.py",
     "bridge-api/app/services/agent_ai.py",
+    "bridge-api/app/services/backup.py",
     "scripts/audit_dependencies.py",
     "scripts/quality_gates.py",
 )
