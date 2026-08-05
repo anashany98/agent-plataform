@@ -45,3 +45,14 @@
 
 ## 3. License Compliance Declaration
 All third-party open-source components used in `agent-platform` comply with their respective MIT, BSD, and PostgreSQL licenses. Proprietary business logic developed for Bridge API and Admin Portal remains strictly client-owned under Option A Architecture.
+
+---
+
+## 4. Actualización 2026-08-04 (remediación)
+- Las licencias de las dependencias Python se re-verificaron leyendo `importlib.metadata`
+  del entorno de desarrollo; la matriz completa (uso + restricciones) está en
+  `docs/LICENSE_MATRIX.md`.
+- Los componentes *vendor* (FlowWink MIT, Chatwoot CE, Activepieces CE) son opcionales
+  y quedan fuera del core (Ruta A). Sus rutas *enterprise* y cualquier distribución
+  comercial requieren **revisión legal (B-008)** antes de una release.
+- Este aviso no concede derechos de redistribución sin dicha revisión.
