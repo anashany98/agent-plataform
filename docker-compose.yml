@@ -262,7 +262,10 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - bridge_uploads:/data/uploads
-    networks: [internal, data]
+    # `public` da egress para integraciones externas reales (PrestaShop/GHL).
+    # En producción el egress debe ir por un proxy con allowlist (D-006); quita
+    # `public` si no necesitas integraciones externas.
+    networks: [public, internal, data]
     depends_on:
       bridge-db:
         condition: service_healthy
@@ -360,6 +363,9 @@ services:
       NODE_ENV: production
       RAILS_ENV: production
       INSTALLATION_ENV: docker
+      # Registro de cuentas: desactivado por defecto (seguro). Actívalo solo en
+      # desarrollo local para crear el primer admin (CHATWOOT_ENABLE_SIGNUP=true en .env).
+      ENABLE_ACCOUNT_SIGNUP: ${CHATWOOT_ENABLE_SIGNUP:-false}
       SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE}
       POSTGRES_HOST: chatwoot-db
       POSTGRES_PORT: 5432
@@ -369,7 +375,6 @@ services:
       REDIS_URL: redis://:${CHATWOOT_REDIS_PASSWORD}@chatwoot-redis:6379/0
       FRONTEND_URL: ${CHATWOOT_PUBLIC_URL:-http://localhost:9000/chatwoot}
       RAILS_LOG_TO_STDOUT: "true"
-      ENABLE_ACCOUNT_SIGNUP: "false"
     volumes:
       - chatwoot_storage_data:/app/storage
     networks: [internal, data]
