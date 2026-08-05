@@ -20,6 +20,7 @@
 **Commit Agentes/IA FlowWink lote 2 (D-012):** `59558a1`
 **Commit backup/restore/rollback (D-015/D-016):** `6b34200`
 **Commit infra runtime (D-008/D-025):** `f6137e0`
+**Commit chat sin Chatwoot + E2E (Ruta A):** `c2f4b84`
 **Fase activa:** Fase 3 — extracción de automatizaciones FlowWink sin Supabase (Wave 1 de P1/P2 agotada)
 **Ruta aprobada:** Ruta A — candidata core con limitaciones documentadas (`DECISIONS.md` D-007)
 **Decisión:** **NOT PRODUCTION READY — CRITICAL RISK**
@@ -51,6 +52,7 @@
 - El 2026-08-03, con autorización del propietario, se detuvieron los tres compose projects del workspace antiguo (`agent-platform`, `agent-piloto-rc1`, `agent-cliente-demo-es-staging`); volúmenes intactos y puerto 9000 liberado. La memoria de la VM Docker queda pendiente de liberación/medición (B-001 mitigado).
 - Permanecen 7 P1 y 0 P2 no verificados; no existe candidata de release ni evidencia E2E/live suficiente.
 - El 2026-08-04, con Docker operativo, se levantó el perfil **core** y se verificó en runtime: proxy healthy con `cap_add SETUID` (26 workers sin `setuid EPERM`, D-008), upstreams opcionales (chatwoot/activepieces) con resolución perezosa que dejan arrancar el core sin ellos (502 graceful), límites `deploy.resources` aplicados por contenedor (D-025) y smoke 200 por el puerto 9000 (portal/api/flowwink). El host queda ~3,9 GB libres con el core arriba.
+- El 2026-08-04 se desacopló el canal de respuesta de Chatwoot (`c2f4b84`): cuando `CHATWOOT_API_TOKEN` no está configurado, el webhook degrada el reply/efectos a un canal interno auditado y el core completa **chat → lead → presupuesto sin dependencias externas**. **E2E en vivo verificado**: webhook firmado HMAC → `quote_created` con total determinista 136,00 (2×50 +21 IVA +15 envío) y token `CONFIRMAR <TOKEN>`; reproducible con `scripts/e2e_core_chat_to_quote.py`.
 - El build del portal fue reproducido anteriormente; la UX dinámica permanece sin validar.
 
 ## Stop-ship abiertos tras el cierre P0
