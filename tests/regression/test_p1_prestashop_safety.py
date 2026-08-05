@@ -9,6 +9,7 @@ import pytest
 from app.database import Base
 from app.installation_context import installation_scope
 from app.models.models import Product
+from app.services import prestashop_adapter as ps_module
 from app.services.deterministic_tools import (
     BusinessRuleError,
     DeterministicToolsService,
@@ -317,3 +318,40 @@ def test_adapter_search_does_not_expose_non_sellable_products(
     adapter._get = fake_get  # type: ignore[method-assign]
 
     assert asyncio.run(adapter.search_products("oculto", include_details=False)) == []
+
+
+class _EmptyListResponse:
+    status_code = 200
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> list:
+        return []  # PrestaShop devuelve [] cuando no hay resultados
+
+
+class _EmptyListClient:
+    async def __aenter__(self) -> "_EmptyListClient":
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
+    async def get(self, url: str, **kwargs: Any) -> _EmptyListResponse:
+        return _EmptyListResponse()
+
+
+def test_empty_prestashop_result_is_empty_collection_not_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D-033/D-034: un resultado vacío ([]) no debe romper la búsqueda (D-010 E2E real)."""
+
+    monkeypatch.setattr(
+        ps_module.httpx, "AsyncClient", lambda **kwargs: _EmptyListClient()
+    )
+    adapter = _adapter()
+    adapter.base_url = "https://fake.invalid"
+    adapter.api_key = "test-key"
+
+    assert asyncio.run(adapter.search_products("sin-resultados")) == []
+    assert asyncio.run(adapter.list_products(limit=10)) == []

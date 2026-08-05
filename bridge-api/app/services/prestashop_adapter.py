@@ -60,6 +60,12 @@ class PrestaShopAdapter:
                 )
                 response.raise_for_status()
                 payload = response.json()
+                # PrestaShop devuelve [] (array vacío) cuando no hay resultados;
+                # lo tratamos como colección vacía, no como error de formato.
+                if isinstance(payload, list):
+                    if not payload:
+                        return {}
+                    raise PrestaShopIntegrationError("PrestaShop devolvió un formato inesperado")
                 if not isinstance(payload, dict):
                     raise PrestaShopIntegrationError("PrestaShop devolvió un formato inesperado")
                 return payload

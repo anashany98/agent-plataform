@@ -52,7 +52,14 @@ def test_llm_mock_is_explicit_not_disguised_as_openai(client, auth_headers):
     assert data['estimated_cost_usd'] == 0
 
 
-def test_prestashop_and_ghl_fail_closed_without_credentials(client, auth_headers):
+def test_prestashop_and_ghl_fail_closed_without_credentials(client, auth_headers, monkeypatch):
+    # Hermético (D-032): aunque .env tenga credenciales reales, este test fuerza
+    # adaptadores sin credenciales para probar el fallo cerrado sin tocar la red.
+    from app.main import ghl_adapter, prestashop_adapter
+    monkeypatch.setattr(prestashop_adapter, "api_key", "")
+    monkeypatch.setattr(prestashop_adapter, "base_url", "")
+    monkeypatch.setattr(ghl_adapter, "token", "")
+    monkeypatch.setattr(ghl_adapter, "location_id", "")
     prestashop = client.get('/integrations/prestashop/products?query=silla', headers=auth_headers)
     assert prestashop.status_code == 503
     ghl = client.post(
