@@ -221,6 +221,12 @@ class Settings(BaseSettings):
             errors.append("LLM_PRICING_CATALOG_JSON")
         if self.CHATWOOT_HANDOFF_TEAM_ID <= 0 and self.CHATWOOT_HANDOFF_ASSIGNEE_ID <= 0:
             errors.append("CHATWOOT_HANDOFF_TEAM_ID/CHATWOOT_HANDOFF_ASSIGNEE_ID")
+        if self.DATABASE_URL.strip().lower().startswith("sqlite"):
+            errors.append("DATABASE_URL_SQLITE")
+        if "*" in self.allowed_origins or "*" in self.allowed_hosts:
+            errors.append("CORS/HOSTS_ABIERTOS")
+        if os.getenv("DEBUG", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            errors.append("DEBUG")
         if errors:
             raise RuntimeError("Configuración insegura para producción: " + ", ".join(errors))
 

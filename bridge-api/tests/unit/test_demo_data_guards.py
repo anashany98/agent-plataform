@@ -23,6 +23,12 @@ def _production_like_settings(environment: str, **overrides: object) -> Settings
         "AUTO_CREATE_SCHEMA": False,
         "ALLOW_DEMO_DATA": False,
         "AUTO_SEED_DEMO_DATA": False,
+        # Autocontenido: en production-like SQLite/CORS abierto/DEBUG se rechazan
+        # (D-022), así que el fixture usa PostgreSQL y orígenes/host cerrados para
+        # aislar el comportamiento de los flags demo.
+        "DATABASE_URL": "postgresql://user:pass@db:5432/bridge",
+        "ALLOWED_ORIGINS": "https://portal.example.com",
+        "ALLOWED_HOSTS": "portal.example.com,bridge-api",
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
