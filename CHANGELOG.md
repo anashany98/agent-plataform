@@ -6,6 +6,7 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 
 ### Added
 
+- Validación stricta production-like ampliada (D-022, `6c689da`): `validate_runtime_security` (llamada al arrancar) rechaza en producción SQLite, CORS/host abiertos y DEBUG, además de secretos débiles, mocks/stubs, demo y presupuestos de retry/breaker/outbox; 12 evals.
 - Preflight atómico de puertos (D-009, `19e7f71`): `provision-client.sh`/`.ps1` validan daemon accesible y puerto proxy libre antes de escribir `.env`/build/up, para no alterar instalaciones existentes ni dejar artefactos parciales; test hermético de `port_in_use` (Linux) y sintaxis bash.
 - Chat sin Chatwoot (Ruta A) + E2E (`c2f4b84`): el webhook de chat degrada el reply/efectos de Chatwoot a un canal interno auditado cuando `CHATWOOT_API_TOKEN` no está configurado, y el core completa chat→lead→presupuesto sin dependencias externas; `scripts/e2e_core_chat_to_quote.py` lo verifica en vivo (webhook firmado HMAC → `quote_created` con total determinista 136,00 y token `CONFIRMAR <TOKEN>`); `ChatwootAdapter.api_token` pasa a propiedad (settings o valor fijado).
 - Infra runtime verificada (D-008/D-025): proxy nginx con `cap_add` CHOWN/SETGID/SETUID (workers estables sin `setuid EPERM`), upstreams opcionales chatwoot/activepieces con resolución perezosa (`resolver`+variable) para que el perfil core arranque sin ellos (502 graceful), y límites `deploy.resources` (CPU/memoria/pids) por servicio; perfil core levantado y smoke 200 por el puerto 9000.
