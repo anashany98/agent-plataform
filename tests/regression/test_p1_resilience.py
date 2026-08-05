@@ -569,6 +569,7 @@ def test_webhook_ghl_outage_queues_lead_and_outbox_recovers(
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", capture_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
     _configure_ghl(monkeypatch)
 
     async def ghl_down(**_kwargs: Any) -> dict[str, Any]:
@@ -668,6 +669,7 @@ def test_outbox_checkpoint_prevents_duplicate_opportunity(
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", silent_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
     _configure_ghl(monkeypatch)
 
     opportunities: list[str] = []

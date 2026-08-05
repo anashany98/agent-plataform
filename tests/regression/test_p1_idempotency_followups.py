@@ -266,6 +266,7 @@ def test_d035_young_orphan_claim_is_not_acknowledged_as_terminal_duplicate(
         return {"status": "synthetic-no-op"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "send_reply", capture_reply)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "toggle_human_handoff", no_op)
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "add_private_note", no_op)
 
@@ -313,6 +314,7 @@ def test_d035_live_worker_past_creation_ttl_keeps_lease_and_blocks_duplicate(
         return {"status": "synthetic-no-op"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "send_reply", capture_reply)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "toggle_human_handoff", no_op)
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "add_private_note", no_op)
 
@@ -344,6 +346,7 @@ def test_d035_processing_failure_remains_durable_and_retryable(
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "toggle_human_handoff", no_op)
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "add_private_note", no_op)
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "send_reply", fail_reply)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
 
     response = _signed_chatwoot_request(isolated_api.client, payload)
     response_body = _response_payload(response)

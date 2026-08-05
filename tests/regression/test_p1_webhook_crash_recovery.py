@@ -175,6 +175,7 @@ def test_crash_after_effect_recovers_from_checkpoint_without_repeating_reply(
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", capture_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
 
     real_complete = bridge_main._complete_idempotency
     complete_calls = {"count": 0}
@@ -246,6 +247,7 @@ def test_hard_crash_stuck_processing_recovers_via_expired_lease(
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", capture_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
 
     suffix = uuid.uuid4().hex
     payload = _webhook_payload(suffix, f"lead-stuck-{suffix[:10]}@example.com")
@@ -309,6 +311,7 @@ def test_failure_before_any_external_effect_retries_normally(
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", flaky_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
 
     suffix = uuid.uuid4().hex
     payload = _webhook_payload(suffix, f"lead-flaky-{suffix[:10]}@example.com")

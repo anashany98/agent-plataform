@@ -13,7 +13,17 @@ class ChatwootIntegrationError(RuntimeError):
 class ChatwootAdapter:
     def __init__(self) -> None:
         self.base_url = settings.CHATWOOT_BASE_URL.rstrip("/")
-        self.api_token = settings.CHATWOOT_API_TOKEN
+        self._api_token: str | None = None
+
+    @property
+    def api_token(self) -> str:
+        # Si se fijó explícitamente (tests), úsalo; si no, lee de settings en
+        # cada llamada para reflejar cambios en runtime y monkeypatch.
+        return self._api_token if self._api_token is not None else settings.CHATWOOT_API_TOKEN
+
+    @api_token.setter
+    def api_token(self, value: str) -> None:
+        self._api_token = value
 
     def _headers(self) -> Dict[str, str]:
         if not self.api_token:

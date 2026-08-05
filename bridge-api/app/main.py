@@ -1072,6 +1072,55 @@ async def _capture_ghl_opportunity(db: Session, customer: Customer, quote: Dict[
     }
 
 
+# ---------------------------------------------------------------------------
+# Canal de respuesta tolerante (Ruta A: core sin Chatwoot).
+# Si Chatwoot está configurado, se envía la respuesta/efecto al canal externo.
+# Si no lo está (perfil core), el efecto se registra internamente (auditoría)
+# y el flujo continúa, de modo que el core opera sin dependencias externas.
+# No es un mock: es un canal interno real y auditado de degradación.
+# ---------------------------------------------------------------------------
+def _chatwoot_enabled() -> bool:
+    return bool(settings.CHATWOOT_API_TOKEN)
+
+
+async def _safe_chat_reply(db: Session, account_id, conversation_id, reply: str) -> None:
+    if _chatwoot_enabled():
+        await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
+    else:
+        _audit(
+            db,
+            event_type="chat.reply_internal",
+            status_value="success",
+            details={
+                "account_id": str(account_id),
+                "conversation_id": str(conversation_id),
+                "reply": reply,
+                "channel": "internal",
+            },
+            commit=False,
+        )
+
+
+async def _safe_chat_sideeffect(db: Session, make, *, label: str, account_id, conversation_id) -> None:
+    """Ejecuta un efecto de Chatwoot solo si está configurado; si no, lo audita."""
+
+    if _chatwoot_enabled():
+        await make()
+    else:
+        _audit(
+            db,
+            event_type="chat.sideeffect_internal",
+            status_value="success",
+            details={
+                "label": label,
+                "account_id": str(account_id),
+                "conversation_id": str(conversation_id),
+                "channel": "internal",
+            },
+            commit=False,
+        )
+
+
 @app.post("/webhooks/chatwoot", tags=["Webhooks"])
 async def receive_chatwoot_webhook(
     request: Request,
@@ -1143,11 +1192,11 @@ async def receive_chatwoot_webhook(
         lowered = content.lower()
         confirmation_token = _extract_confirmation_token(content)
         if any(term in lowered for term in ("humano", "persona", "comercial")):
-            await chatwoot_adapter.toggle_human_handoff(int(account_id), int(conversation_id), "open")
-            await chatwoot_adapter.assign_human_handoff(int(account_id), int(conversation_id))
-            await chatwoot_adapter.add_private_note(int(account_id), int(conversation_id), "El cliente ha solicitado atención humana.")
+            await _safe_chat_sideeffect(db, lambda: chatwoot_adapter.toggle_human_handoff(int(account_id), int(conversation_id), "open"), label="handoff_open", account_id=account_id, conversation_id=conversation_id)
+            await _safe_chat_sideeffect(db, lambda: chatwoot_adapter.assign_human_handoff(int(account_id), int(conversation_id)), label="handoff_assign", account_id=account_id, conversation_id=conversation_id)
+            await _safe_chat_sideeffect(db, lambda: chatwoot_adapter.add_private_note(int(account_id), int(conversation_id), "El cliente ha solicitado atención humana."), label="handoff_note", account_id=account_id, conversation_id=conversation_id)
             reply = "Te he transferido al equipo comercial. Te atenderán lo antes posible."
-            await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
+            await _safe_chat_reply(db, account_id, conversation_id, reply)
             result = {"status": "success", "action": "human_handoff", "reply": reply}
             _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
         elif confirmation_token:
@@ -1170,12 +1219,12 @@ async def receive_chatwoot_webhook(
                 confirmation_token,
                 confirmed_by=confirmed_by,
             )
-            await chatwoot_adapter.add_labels(int(account_id), int(conversation_id), ["venta_confirmada", "pendiente_aprobacion"])
+            await _safe_chat_sideeffect(db, lambda: chatwoot_adapter.add_labels(int(account_id), int(conversation_id), ["venta_confirmada", "pendiente_aprobacion"]), label="venta_labels", account_id=account_id, conversation_id=conversation_id)
             reply = (
                 f"Pedido {order_result['order_id']} registrado por {order_result.get('total_amount', 0):.2f} "
                 f"{order_result.get('currency', settings.CURRENCY)}. La factura permanece como borrador pendiente de aprobación."
             )
-            await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
+            await _safe_chat_reply(db, account_id, conversation_id, reply)
             result = {
                 "status": "success",
                 "action": "order_created" if order_result.get("created") else "order_already_exists",
@@ -1191,7 +1240,7 @@ async def receive_chatwoot_webhook(
                 "No se ha confirmado ningún pedido. Para confirmar usa exactamente "
                 "el comando CONFIRMAR <TOKEN> mostrado en el presupuesto vigente."
             )
-            await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
+            await _safe_chat_reply(db, account_id, conversation_id, reply)
             result = {"status": "success", "action": "confirmation_not_applied", "reply": reply}
             _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
         elif any(term in lowered for term in ("necesito", "comprar", "busco", "unidades", "producto")):
@@ -1235,7 +1284,7 @@ async def receive_chatwoot_webhook(
             products = tools.search_products(query, limit=10)
             if not products:
                 reply = "No he encontrado un producto verificable que coincida con tu necesidad. Te transfiero al equipo comercial."
-                await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
+                await _safe_chat_reply(db, account_id, conversation_id, reply)
                 result = {"status": "success", "action": "no_product_found", "reply": reply}
                 _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
             else:
@@ -1243,7 +1292,7 @@ async def receive_chatwoot_webhook(
                 stock = tools.check_stock(product["id"], qty)
                 if not stock["available"]:
                     reply = f"He encontrado {product['name']}, pero no hay {qty} unidades disponibles. Puedo transferirte al equipo comercial."
-                    await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
+                    await _safe_chat_reply(db, account_id, conversation_id, reply)
                     result = {"status": "success", "action": "insufficient_stock", "product": product, "reply": reply}
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
                 else:
@@ -1266,7 +1315,7 @@ async def receive_chatwoot_webhook(
                         f"Responde exactamente CONFIRMAR {quote['confirmation_token']} para solicitar el pedido. "
                         f"El token caduca y solo autoriza este presupuesto.{contact_notice}"
                     )
-                    await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
+                    await _safe_chat_reply(db, account_id, conversation_id, reply)
                     result = {
                         "status": "success",
                         "action": "quote_created" if quote.get("created", True) else "quote_already_exists",
@@ -1298,7 +1347,7 @@ async def receive_chatwoot_webhook(
                     + "\n".join(lines)
                     + "\nIndícame la cantidad y tus datos de contacto para preparar una solicitud de presupuesto."
                 )
-                await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
+                await _safe_chat_reply(db, account_id, conversation_id, reply)
                 result = {
                     "status": "success",
                     "action": "verified_product_recommendations",
@@ -1318,7 +1367,7 @@ async def receive_chatwoot_webhook(
                     reply = str(evidence.get("answer") or "").strip()
                     if sources:
                         reply += f"\n\nFuentes: {sources}."
-                    await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
+                    await _safe_chat_reply(db, account_id, conversation_id, reply)
                     result = {"status": "success", "action": "verified_document_answer", "reply": reply, "evidence": evidence}
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
                 else:
@@ -1326,7 +1375,7 @@ async def receive_chatwoot_webhook(
                         "No tengo información verificable suficiente para responder con seguridad. "
                         "Voy a dejar la consulta preparada para que la revise una persona del equipo."
                     )
-                    await chatwoot_adapter.send_reply(int(account_id), int(conversation_id), reply)
+                    await _safe_chat_reply(db, account_id, conversation_id, reply)
                     await chatwoot_adapter.toggle_human_handoff(int(account_id), int(conversation_id), "open")
                     await chatwoot_adapter.assign_human_handoff(int(account_id), int(conversation_id))
                     await chatwoot_adapter.add_private_note(
