@@ -10,6 +10,17 @@ $EnvFile = ".env.$ClientId"
 if (Test-Path $EnvFile) { throw "$EnvFile ya existe. No se sobrescribe para evitar perder secretos." }
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw "Docker no está instalado." }
 
+# Preflight atómico (D-009): valida que el puerto esté libre ANTES de escribir
+# .env / build / up, para no alterar instalaciones existentes ni dejar parciales.
+try {
+  $probe = New-Object System.Net.Sockets.TcpClient
+  $probe.Connect("127.0.0.1", $ProxyPort)
+  $probe.Close()
+  throw "El puerto $ProxyPort ya está en uso por otro proceso/proyecto. Elige otro puerto (parámetro -ProxyPort)."
+} catch [System.Net.Sockets.SocketException] {
+  # Conexión rechazada => puerto libre; continuar.
+}
+
 docker compose version | Out-Null
 function New-Secret([int]$Bytes = 36) {
     $buffer = New-Object byte[] $Bytes

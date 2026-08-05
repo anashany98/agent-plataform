@@ -18,6 +18,28 @@ ENV_FILE=".env.${CLIENT_ID}"
 command -v docker >/dev/null || { echo "Docker no está instalado." >&2; exit 1; }
 docker compose version >/dev/null || { echo "Docker Compose v2 no está disponible." >&2; exit 1; }
 
+# Devuelve 0 si el puerto TCP local está ocupado.
+port_in_use() {
+  local port="$1"
+  if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+    exec 3>&- 3<&- || true
+    return 0
+  fi
+  return 1
+}
+
+# Preflight atómico (D-009): valida ANTES de escribir .env / build / up para no
+# alterar instalaciones existentes ni dejar artefactos parciales si falla.
+docker info >/dev/null 2>&1 || { echo "El daemon de Docker no está accesible." >&2; exit 1; }
+if [[ ! "$PROXY_PORT" =~ ^[0-9]+$ ]] || (( PROXY_PORT < 1 || PROXY_PORT > 65535 )); then
+  echo "Puerto proxy inválido: ${PROXY_PORT}." >&2; exit 1
+fi
+if port_in_use "$PROXY_PORT"; then
+  echo "El puerto ${PROXY_PORT} ya está en uso por otro proceso/proyecto." >&2
+  echo "Elige otro puerto (3er argumento) para conservar la asignación por cliente." >&2
+  exit 1
+fi
+
 secret_hex() { openssl rand -hex "${1:-32}"; }
 secret_b64() { openssl rand -base64 "${1:-36}" | tr -d '\n'; }
 command -v openssl >/dev/null || { echo "OpenSSL es obligatorio para generar secretos." >&2; exit 1; }
