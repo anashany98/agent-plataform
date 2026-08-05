@@ -6,6 +6,7 @@ Todos los cambios relevantes de la remediación se documentan aquí. El proyecto
 
 ### Added
 
+- PrestaShop resultado vacío (D-033/D-034, `7b6f3b1`): PrestaShop devuelve `[]` cuando una búsqueda no tiene resultados; el adaptador lo trataba como "formato inesperado". Ahora se trata como colección vacía. E2E de solo lectura contra la tienda real verificado (`sync?dry_run` leyó productos reales); el test fail-closed se fuerza sin credenciales para no tocar la red (D-032).
 - Licencias (D-023, `8a098f3`): `LICENSE` raíz (código propio propietario + puntero a notices), `THIRD_PARTY_NOTICES.md` actualizado y `docs/LICENSE_MATRIX.md` con licencias Python verificadas vía `importlib.metadata`; vendor/EE marcados "requiere revisión legal" (B-008).
 - Validación stricta production-like ampliada (D-022, `6c689da`): `validate_runtime_security` (llamada al arrancar) rechaza en producción SQLite, CORS/host abiertos y DEBUG, además de secretos débiles, mocks/stubs, demo y presupuestos de retry/breaker/outbox; 12 evals.
 - Preflight atómico de puertos (D-009, `19e7f71`): `provision-client.sh`/`.ps1` validan daemon accesible y puerto proxy libre antes de escribir `.env`/build/up, para no alterar instalaciones existentes ni dejar artefactos parciales; test hermético de `port_in_use` (Linux) y sintaxis bash.
