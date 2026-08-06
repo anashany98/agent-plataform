@@ -1678,14 +1678,23 @@ async def receive_chatwoot_webhook(
             #         Evita falsos positivos tipo "Hola" → "holandesa".
             # ----------------------------------------------------------------
             if _is_greeting(content):
-                reply = (
-                    "¡Hola! Soy el asistente de la tienda. "
-                    "Dime qué buscas (por ejemplo: \"tienes blocs de "
-                    "dibujo?\" o \"muéstrame material de oficina\") y "
-                    "te ayudo a encontrarlo. Si quieres, también "
-                    "puedes preguntarme \"qué tenéis\" para ver un "
-                    "resumen del catálogo."
-                )
+                # Saludo: el LLM genera una respuesta breve y natural,
+                # no un texto fijo predeterminado.
+                from app.services.agent_ai import commerce_chat
+                try:
+                    ai_reply = await commerce_chat(
+                        db,
+                        query=content,
+                        products=[],
+                        intent="greeting",
+                        conversation_id=str(conversation_id),
+                    )
+                    reply = ai_reply["answer"]
+                except Exception:
+                    reply = (
+                        "¡Hola! Soy el asistente de la tienda. "
+                        "¿En qué puedo ayudarte?"
+                    )
                 await _safe_chat_reply(db, account_id, conversation_id, reply)
                 result = {
                     "status": "success",
@@ -1706,13 +1715,30 @@ async def receive_chatwoot_webhook(
                     limit=overview_limit,
                 )
                 if comparison_result is not None:
-                    reply, compared = comparison_result
+                    # El LLM genera la respuesta comparativa en lenguaje
+                    # natural usando los productos como contexto.
+                    from app.services.agent_ai import commerce_chat
+                    try:
+                        ai_reply = await commerce_chat(
+                            db,
+                            query=content,
+                            products=comparison_result[1],
+                            intent="comparison",
+                            conversation_id=str(conversation_id),
+                        )
+                        reply = ai_reply["answer"]
+                        provider_used = ai_reply["provider"]
+                    except Exception:
+                        reply, _ = comparison_result
+                        provider_used = "extractive"
+                    compared = comparison_result[1]
                     await _safe_chat_reply(db, account_id, conversation_id, reply)
                     result = {
                         "status": "success",
                         "action": "product_comparison",
                         "products": compared,
                         "reply": reply,
+                        "llm_provider": provider_used,
                     }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
                     # Early return: la comparación cubre la intención de
@@ -1733,22 +1759,46 @@ async def receive_chatwoot_webhook(
                     "", limit=overview_limit, source="prestashop"
                 )
                 if verified_products:
-                    lines = []
-                    for product in verified_products:
-                        availability = (
-                            f"{product['available_stock']} disponibles"
-                            if product["available_stock"] > 0
-                            else "sin existencias disponibles"
+                    # LLM genera la respuesta en lenguaje natural con
+                    # todos los productos PrestaShop como contexto.
+                    from app.services.agent_ai import commerce_chat
+                    try:
+                        ai_reply = await commerce_chat(
+                            db,
+                            query=content,
+                            products=verified_products,
+                            intent="catalog_request",
+                            extra_context=(
+                                f"El cliente quiere ver TODO el catálogo. "
+                                f"Tenemos {len(verified_products)} productos "
+                                "sincronizados desde PrestaShop. Si son "
+                                "muchos, organízalos por categoría y al "
+                                "final pregunta si quiere filtrar o "
+                                "comparar."
+                            ),
+                            conversation_id=str(conversation_id),
                         )
-                        lines.append(
-                            f"• {product['name']} ({product['sku']}): "
-                            f"{product['unit_price']:.2f} {settings.CURRENCY}, {availability}."
+                        reply = ai_reply["answer"]
+                        provider_used = ai_reply["provider"]
+                    except Exception:
+                        # Fallback determinista.
+                        lines = []
+                        for product in verified_products:
+                            availability = (
+                                f"{product['available_stock']} disponibles"
+                                if product["available_stock"] > 0
+                                else "sin existencias disponibles"
+                            )
+                            lines.append(
+                                f"• {product['name']} ({product['sku']}): "
+                                f"{product['unit_price']:.2f} {settings.CURRENCY}, {availability}."
+                            )
+                        reply = (
+                            f"Estos son los {len(verified_products)} productos "
+                            "que tenemos sincronizados desde PrestaShop:\n"
+                            + "\n".join(lines)
                         )
-                    reply = (
-                        f"Estos son los {len(verified_products)} productos "
-                        "que tenemos sincronizados desde PrestaShop:\n"
-                        + "\n".join(lines)
-                    )
+                        provider_used = "extractive"
                     if len(verified_products) >= overview_limit:
                         reply += (
                             f"\n\n(He mostrado los primeros {overview_limit} "
@@ -1762,6 +1812,7 @@ async def receive_chatwoot_webhook(
                         "domain": domain_hint,
                         "products": verified_products,
                         "reply": reply,
+                        "llm_provider": provider_used,
                     }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
                     return result
@@ -1826,16 +1877,84 @@ async def receive_chatwoot_webhook(
                 # devolvemos TODOS los productos PrestaShop como
                 # alternativa (no un top-N limitado).
                 if domain_hint and not scoped_products and not specific_products:
-                    catalog_summary = await _build_catalog_categories_summary(
-                        db, tools=tools, limit=overview_limit
+                    # Categoría ausente: el LLM redacta un mensaje natural
+                    # reconociendo que no hay esa categoría y ofreciendo
+                    # el catálogo completo como alternativa.
+                    from app.services.agent_ai import commerce_chat
+                    try:
+                        ai_reply = await commerce_chat(
+                            db,
+                            query=content,
+                            products=verified_products,
+                            intent="category_empty",
+                            extra_context=(
+                                f"El cliente pidió '{_humanize_category(domain_hint)}' "
+                                f"pero NO hay productos en esa categoría. "
+                                "Reconócelo brevemente y sugiere 1-2 "
+                                "alternativas reales del bloque o "
+                                "pregunta qué necesita realmente."
+                            ),
+                            conversation_id=str(conversation_id),
+                        )
+                        reply = ai_reply["answer"]
+                        provider_used = ai_reply["provider"]
+                    except Exception:
+                        reply = (
+                            f"De momento no tenemos {_humanize_category(domain_hint)} "
+                            f"en el catálogo. Tenemos {len(verified_products)} "
+                            "productos en otras categorías. Dime qué necesitas y "
+                            "te ayudo a buscar."
+                        )
+                        provider_used = "extractive"
+                    await _safe_chat_reply(db, account_id, conversation_id, reply)
+                    result = {
+                        "status": "success",
+                        "action": "category_empty",
+                        "domain": domain_hint,
+                        "products": verified_products,
+                        "reply": reply,
+                        "llm_provider": provider_used,
+                    }
+                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                    return result
+                action_label = "catalog_full_list"
+            else:
+                # Sin coincidencias y sin intención de catálogo: caemos a
+                # RAG/handoff.
+                verified_products = []
+
+            if verified_products:
+                # La respuesta la genera el LLM (Ollama local por
+                # defecto) con los productos PrestaShop como contexto.
+                # El LLM adapta el texto al cliente en lugar de
+                # devolver un mensaje fijo predeterminado.
+                from app.services.agent_ai import commerce_chat
+                intent_for_llm = {
+                    "catalog_scoped_recommendation": "scoped",
+                    "verified_product_recommendations": "search",
+                    "catalog_full_list": "catalog_request",
+                }.get(action_label, "browse")
+                extra_ctx = None
+                if action_label == "catalog_scoped_recommendation" and domain_hint:
+                    extra_ctx = (
+                        f"El cliente pidió productos de la categoría "
+                        f"'{_humanize_category(domain_hint)}'. Limita la "
+                        "respuesta a esa categoría."
                     )
-                    header = (
-                        f"De momento no tenemos {_humanize_category(domain_hint)} en el catálogo. "
-                        f"Tenemos {catalog_summary['total']} productos en "
-                        f"{catalog_summary['n_categories']} categorías distintas. "
-                        "Aquí tienes todo el catálogo disponible:\n"
+                try:
+                    ai_reply = await commerce_chat(
+                        db,
+                        query=content,
+                        products=verified_products,
+                        intent=intent_for_llm,
+                        extra_context=extra_ctx,
+                        conversation_id=str(conversation_id),
                     )
-                    # Renderizamos TODOS los productos.
+                    reply = ai_reply["answer"]
+                    provider_used = ai_reply["provider"]
+                except Exception as exc:
+                    _LOG.warning("commerce_chat failed, fallback to extractive: %s", exc)
+                    # Fallback determinista: bullet list básico.
                     lines = []
                     for product in verified_products:
                         availability = (
@@ -1847,63 +1966,11 @@ async def receive_chatwoot_webhook(
                             f"• {product['name']} ({product['sku']}): "
                             f"{product['unit_price']:.2f} {settings.CURRENCY}, {availability}."
                         )
-                    reply = header + "\n".join(lines) + (
-                        "\n\n¿Quieres hablar con un comercial o prefieres "
-                        "que te ayude a buscar otra cosa?"
+                    reply = (
+                        f"He encontrado {len(verified_products)} producto(s):\n"
+                        + "\n".join(lines)
                     )
-                    await _safe_chat_reply(db, account_id, conversation_id, reply)
-                    result = {
-                        "status": "success",
-                        "action": "category_empty",
-                        "domain": domain_hint,
-                        "products": verified_products,
-                        "reply": reply,
-                    }
-                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
-                    return result
-                action_label = "catalog_full_list"
-            else:
-                # Sin coincidencias y sin intención de catálogo: caemos a
-                # RAG/handoff.
-                verified_products = []
-
-            if verified_products:
-                lines = []
-                for product in verified_products:
-                    availability = (
-                        f"{product['available_stock']} disponibles"
-                        if product["available_stock"] > 0
-                        else "sin existencias disponibles"
-                    )
-                    lines.append(
-                        f"• {product['name']} ({product['sku']}): "
-                        f"{product['unit_price']:.2f} {settings.CURRENCY}, {availability}."
-                    )
-                if action_label == "catalog_scoped_recommendation":
-                    header = f"He encontrado estas opciones de {_humanize_category(domain_hint)}:\n"
-                    footer = (
-                        "¿Cuál te encaja? Si quieres que las compare o pidas presupuesto, dime el nombre."
-                    )
-                elif action_label == "verified_product_recommendations":
-                    header = "He encontrado estas opciones verificadas en el catálogo:\n"
-                    footer = (
-                        "¿Te interesa alguna? Dime cuál y la cantidad y preparo una solicitud de presupuesto."
-                    )
-                elif action_label == "catalog_full_list":
-                    header = (
-                        f"Estos son los {len(verified_products)} productos "
-                        "que tenemos sincronizados desde PrestaShop:\n"
-                    )
-                    footer = (
-                        "\n¿Quieres que compare alguno, te prepare un "
-                        "presupuesto o tienes alguna otra consulta?"
-                    )
-                else:
-                    header = "Estas son las opciones verificadas disponibles en el catálogo:\n"
-                    footer = (
-                        "¿Te interesa alguna? Dime cuál y la cantidad y preparo una solicitud de presupuesto."
-                    )
-                reply = header + "\n".join(lines) + "\n" + footer
+                    provider_used = "extractive"
                 await _safe_chat_reply(db, account_id, conversation_id, reply)
                 result = {
                     "status": "success",
@@ -1911,6 +1978,7 @@ async def receive_chatwoot_webhook(
                     "domain": domain_hint,
                     "products": verified_products,
                     "reply": reply,
+                    "llm_provider": provider_used,
                 }
                 _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
             else:
