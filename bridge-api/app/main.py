@@ -627,6 +627,47 @@ def _extract_product_query(content: str) -> str:
     return clean or "Industrial"
 
 
+_PRODUCT_INQUIRY_TOKENS = frozenset({
+    # Sustantivos de catálogo
+    "producto", "productos", "articulo", "articulos", "articulo", "articulos",
+    "catalogo", "tienda", "almacen", "existencia", "existencias",
+    "stock", "referencia", "referencias", "sku",
+    # Verbos de posesión / disponibilidad
+    "tienes", "tiene", "teneis", "tengo", "tienen", "tener", "hay", "haber",
+    # Oferta y recomendación
+    "vendéis", "vendeis", "venden", "vender", "vendido",
+    "disponible", "disponibles", "disponibilidad",
+    "recomienda", "recomiendas", "recomendacion", "recomendaciones",
+    "recomendame", "sugieres", "sugerir",
+    # Preguntas típicas
+    "cuales", "cuáles", "lista", "listado", "opciones",
+})
+
+
+def _looks_like_product_inquiry(content: str) -> bool:
+    """Devuelve True si el mensaje parece una pregunta sobre el catálogo.
+
+    Detecta preguntas genéricas tipo "¿qué tenéis?", "¿qué productos hay?",
+    "¿qué me recomiendas?" o consultas sobre disponibilidad. Si la consulta
+    coincide con un producto concreto, también devolverá True para forzar el
+    resumen del catálogo cuando la búsqueda específica no encuentre nada.
+    """
+    if not content:
+        return False
+    normalized = re.sub(r"[^a-záéíóúñü0-9 ]+", " ", content.lower())
+    tokens = {token for token in normalized.split() if len(token) >= 3}
+    if tokens & _PRODUCT_INQUIRY_TOKENS:
+        return True
+    # Si el mensaje menciona un dominio concreto (silla, mesa, oficina...)
+    # también se considera consulta de catálogo para mostrar un resumen
+    # verificado antes de transferir al equipo comercial.
+    domain_hints = {"silla", "sillas", "mesa", "mesas", "oficina", "papel",
+                    "cuaderno", "cuadernos", "boligrafo", "bolígrafos",
+                    "carpeta", "carpetas", "tinta", "toner", "impresora",
+                    "ordenador", "portatil", "móvil", "movil"}
+    return bool(tokens & domain_hints)
+
+
 def _authoritative_prestashop_tax_rate(remote: Dict[str, Any]) -> Decimal:
     if remote.get("tax_rate") is None:
         raise PrestaShopIntegrationError(
@@ -1330,7 +1371,54 @@ async def receive_chatwoot_webhook(
             # coincidencias verificadas en el catálogo local sincronizado con
             # PrestaShop y, después, evidencia documental pública.
             verified_products = tools.search_products(content, limit=3)
-            if verified_products:
+            product_inquiry = _looks_like_product_inquiry(content)
+            if not verified_products and product_inquiry:
+                # Si la consulta es de catálogo pero no hay coincidencias
+                # específicas (p. ej. "¿qué tenéis?", "¿qué me recomiendas?"),
+                # se ofrece un resumen del catálogo sincronizado desde
+                # PrestaShop en lugar de transferir al equipo comercial.
+                verified_products = tools.search_products("", limit=8)
+                if verified_products:
+                    lines = []
+                    for product in verified_products:
+                        availability = (
+                            f"{product['available_stock']} disponibles"
+                            if product["available_stock"] > 0
+                            else "sin existencias disponibles"
+                        )
+                        lines.append(
+                            f"• {product['name']} ({product['sku']}): "
+                            f"{product['unit_price']:.2f} {settings.CURRENCY}, {availability}."
+                        )
+                    reply = (
+                        "Estas son las opciones verificadas disponibles en el catálogo:\n"
+                        + "\n".join(lines)
+                        + "\nSi te interesa alguna, dime cuál y la cantidad y preparo una solicitud de presupuesto."
+                    )
+                    await _safe_chat_reply(db, account_id, conversation_id, reply)
+                    result = {
+                        "status": "success",
+                        "action": "catalog_overview",
+                        "products": verified_products,
+                        "reply": reply,
+                    }
+                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                else:
+                    reply = (
+                        "De momento no tenemos productos verificables en el catálogo. "
+                        "Te paso con el equipo comercial para que te ayude."
+                    )
+                    await _safe_chat_reply(db, account_id, conversation_id, reply)
+                    await chatwoot_adapter.toggle_human_handoff(int(account_id), int(conversation_id), "open")
+                    await chatwoot_adapter.assign_human_handoff(int(account_id), int(conversation_id))
+                    await chatwoot_adapter.add_private_note(
+                        int(account_id),
+                        int(conversation_id),
+                        "Consulta de catálogo sin productos sincronizados.",
+                    )
+                    result = {"status": "success", "action": "catalog_empty_handoff", "reply": reply}
+                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+            elif verified_products:
                 lines = []
                 for product in verified_products:
                     availability = (

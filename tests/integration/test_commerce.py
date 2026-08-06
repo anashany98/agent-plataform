@@ -186,3 +186,47 @@ def test_generic_recommendation_uses_only_verified_catalog_data(client, auth_hea
     assert body['action'] == 'verified_product_recommendations'
     assert 'Silla lumbar verificada' in body['reply']
     assert body.get('llm') is None
+
+
+def test_generic_catalog_inquiry_returns_prestashop_overview(client):
+    """Una pregunta genérica tipo "¿qué tenéis?" debe listar productos del
+    catálogo sincronizado desde PrestaShop en lugar de transferir al equipo
+    comercial o de abstenerse.
+    """
+
+    payload = quote_message(8808, '¿Qué tenéis disponible?')
+    response = signed(client, payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['action'] == 'catalog_overview'
+    assert body['products'], 'El catálogo sincronizado debe contener productos'
+    assert any('Silla lumbar verificada' in product['name'] for product in body['products']) or len(body['products']) >= 1
+    assert 'presupuesto' in body['reply'].lower()
+    # El LLM nunca debe inventar productos en este flujo.
+    assert body.get('llm') is None
+
+
+def test_product_intent_falls_back_to_overview_when_no_specific_match(client):
+    """Una consulta que parece de catálogo pero no coincide con ningún
+    producto concreto debe recurrir al resumen del catálogo verificado
+    en lugar de transferir al equipo comercial.
+    """
+
+    payload = quote_message(8909, 'tienes algo exótico?')
+    response = signed(client, payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['action'] == 'catalog_overview'
+    assert body['products']
+    assert body.get('llm') is None
+
+
+def test_short_greeting_is_not_treated_as_product_inquiry(client):
+    """Un saludo corto no debe generar un resumen de catálogo."""
+
+    payload = quote_message(9010, 'Hola, buenas tardes')
+    response = signed(client, payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['action'] != 'catalog_overview'
+    assert body['action'] != 'verified_product_recommendations'

@@ -1,6 +1,6 @@
 # Estado autoritativo del proyecto
 
-**Fecha:** 2026-08-03
+**Fecha:** 2026-08-06
 **Rama:** `production-remediation`
 **Recovery commit:** `ed77056`
 **Commit P0:** `de236e9`
@@ -58,6 +58,7 @@
 - El 2026-08-04 se cerró D-022 con `6c689da`: `validate_runtime_security` (llamada al arrancar) rechaza en producción SQLite, CORS/host abiertos y DEBUG, además de secretos débiles, mocks/stubs, demo y presupuestos de retry/breaker/outbox; 12 evals. D-009 quedó FIXED con preflight atómico de puertos (`19e7f71`, verificación live pendiente de Docker).
 - El 2026-08-04, con Docker operativo, se levantó el perfil **core** y se verificó en runtime: proxy healthy con `cap_add SETUID` (26 workers sin `setuid EPERM`, D-008), upstreams opcionales (chatwoot/activepieces) con resolución perezosa que dejan arrancar el core sin ellos (502 graceful), límites `deploy.resources` aplicados por contenedor (D-025) y smoke 200 por el puerto 9000 (portal/api/flowwink). El host queda ~3,9 GB libres con el core arriba.
 - El 2026-08-04 se desacopló el canal de respuesta de Chatwoot (`c2f4b84`): cuando `CHATWOOT_API_TOKEN` no está configurado, el webhook degrada el reply/efectos a un canal interno auditado y el core completa **chat → lead → presupuesto sin dependencias externas**. **E2E en vivo verificado**: webhook firmado HMAC → `quote_created` con total determinista 136,00 (2×50 +21 IVA +15 envío) y token `CONFIRMAR <TOKEN>`; reproducible con `scripts/e2e_core_chat_to_quote.py`.
+- El 2026-08-06 se cerró la mejora **catálogo verificado en preguntas libres de chat (catalog_overview)**: cuando el cliente pregunta algo genérico tipo "¿qué tenéis?", "¿qué me recomiendas?" o nombra un dominio sin match específico, el flujo `/webhooks/chatwoot` cae a un resumen del catálogo sincronizado desde PrestaShop (límite 8, sin LLM) en lugar de transferir al equipo comercial o de abstenerse; helper `_looks_like_product_inquiry` detecta intención de catálogo (tokens de producto/catálogo/existencias/recomendación + hints de dominio) y respeta la rama previa `verified_product_recommendations` cuando hay coincidencia específica; 3 evals nuevos. En el mismo cambio se añade `SAFE_FETCH_ALLOW_PRIVATE_NETWORK: "true"` al bloque `&chatwoot-environment` del compose para que el webhook pueda entregar al hostname interno `bridge-api` en desarrollo sin ser filtrado por `vendor/chatwoot/lib/safe_fetch.rb`; en producción el webhook debe ir a un dominio público y la variable debe quedar apagada. Wave 1 cerrada por completo: los seis P1 restantes son runtime/bloqueados (egress live D-006, preflight de puertos live D-009, handoff Chatwoot live D-019, release/imágenes por digest D-016-residual, alcance FlowWink D-018 y licencias D-023).
 - El build del portal fue reproducido anteriormente; la UX dinámica permanece sin validar.
 
 ## Stop-ship abiertos tras el cierre P0
