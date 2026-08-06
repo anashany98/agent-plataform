@@ -723,6 +723,27 @@ def _humanize_category(category: str) -> str:
     return labels.get(category, category)
 
 
+def _is_full_catalog_request(content: str) -> bool:
+    """Devuelve True si el cliente pide TODO el catálogo completo.
+
+    Detecta frases inequívocas tipo "pásame todo el catálogo",
+    "ver todos los productos", "lista completa de la tienda", etc.
+    En ese caso descartamos los matches específicos (que pueden
+    ser débiles por tokens como "todo"/"completo"/"tienda") y
+    devolvemos el listado completo de productos PrestaShop.
+    """
+    if not content:
+        return False
+    normalized = re.sub(r"[^a-záéíóúñü0-9 ]+", " ", content.lower())
+    tokens = set(normalized.split())
+    # Combinaciones inequívocas: "todo/todos" + "catálogo/productos/artículos/tienda".
+    full_quantifiers = {"todo", "todos", "toda", "todas"}
+    full_targets = {"catalogo", "catálogo", "productos", "articulos", "artículos", "tienda", "vuestra", "referencias", "referencia", "catalogo", "vuestro", "oferta", "existencias"}
+    has_quantifier = bool(tokens & full_quantifiers)
+    has_target = bool(tokens & full_targets)
+    return has_quantifier and has_target
+
+
 def _authoritative_prestashop_tax_rate(remote: Dict[str, Any]) -> Decimal:
     if remote.get("tax_rate") is None:
         raise PrestaShopIntegrationError(
@@ -1339,7 +1360,10 @@ async def receive_chatwoot_webhook(
             await _safe_chat_reply(db, account_id, conversation_id, reply)
             result = {"status": "success", "action": "confirmation_not_applied", "reply": reply}
             _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
-        elif any(term in lowered for term in ("necesito", "comprar", "busco", "unidades", "producto")):
+        elif any(term in lowered for term in ("necesito", "comprar", "busco", "unidades", "producto")) and not _is_full_catalog_request(content):
+            # Las frases tipo "ver todos los productos" caen al catalog_overview
+            # aunque contengan "producto", porque el cliente no quiere comprar
+            # un producto concreto sino ver el catálogo completo.
             query = _extract_product_query(content)
             qty = _extract_quantity(content)
             if prestashop_adapter.configured():
@@ -1425,11 +1449,18 @@ async def receive_chatwoot_webhook(
             # producto generados libremente por un LLM. Primero se buscan
             # coincidencias verificadas en el catálogo local sincronizado con
             # PrestaShop y, después, evidencia documental pública.
+            # CATALOG_OVERVIEW_LIMIT controla el límite deseado por el
+            # operador (default 500). El cap interno (10_000) garantiza
+            # que el chat pueda devolver catálogos completos de
+            # PrestaShop incluso con varios miles de productos. Para
+            # ver TODOS los productos sin tope, basta con poner
+            # CATALOG_OVERVIEW_LIMIT=0 (o muy alto) en .env.
             raw_limit = int(getattr(settings, "CATALOG_OVERVIEW_LIMIT", 500) or 500)
-            overview_limit = max(1, min(raw_limit, 1000))
+            overview_limit = max(1, min(raw_limit, 10_000))
 
             product_inquiry = _looks_like_product_inquiry(content)
             domain_hint = _extract_domain_hint(content) if product_inquiry else None
+            full_catalog_request = _is_full_catalog_request(content)
 
             # Búsqueda específica por el contenido completo (sin domain
             # hint). Si el cliente dice "necesito una silla" el contenido
@@ -1443,6 +1474,11 @@ async def receive_chatwoot_webhook(
                 specific_products = tools.search_products(
                     content, limit=3, source="prestashop"
                 )
+            # Si el cliente pidió TODO el catálogo, descartamos los
+            # matches específicos (que pueden ser débiles y
+            # incompletos) y devolvemos el listado completo.
+            if full_catalog_request:
+                specific_products = []
 
             # Búsqueda scoped por categoría cuando hay domain hint. Tiene
             # precedencia sobre los matches específicos para evitar falsos

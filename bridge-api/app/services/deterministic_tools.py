@@ -142,7 +142,10 @@ class DeterministicToolsService:
 
         Args:
             query: Texto libre para matchear nombre/SKU/categoría/attrs.
-            limit: Tamaño máximo del resultado (clamped a 1..200).
+            limit: Tamaño máximo del resultado (clamped a 1..10_000). El
+                cap interno permite que el ``catalog_overview`` del chat
+                pueda devolver catálogos completos incluso por encima
+                del MVP inicial (300-500 productos).
             include_demo: Si True, incluye productos demo (sólo en tests).
             source: Si se especifica (p. ej. ``"prestashop"``), filtra
                 únicamente productos con ese origen. Útil para que las
@@ -150,7 +153,7 @@ class DeterministicToolsService:
                 realmente disponible en la tienda y excluyan productos
                 sintéticos locales o importados de pruebas internas.
         """
-        safe_limit = max(1, min(limit, 200))
+        safe_limit = max(1, min(limit, 10_000))
         product_query = self.db.query(Product)
         if not include_demo:
             product_query = product_query.filter(self._non_demo_product_clause())

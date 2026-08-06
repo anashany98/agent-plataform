@@ -74,8 +74,10 @@ class Settings(BaseSettings):
     # cliente pregunta algo genérico (catálogo overview). El LLM nunca genera
     # esta lista: la produce `DeterministicToolsService.search_products`. El
     # valor por defecto (500) cubre catálogos completos incluso por encima del
-    # MVP inicial; el cap interno (1000) evita respuestas excesivamente largas
-    # en chats reales.
+    # MVP inicial; el cap interno (10_000) garantiza que el chat pueda
+    # devolver TODO el catálogo PrestaShop incluso si sincroniza varios
+    # miles de productos. Para eliminar el tope por completo basta con
+    # poner ``CATALOG_OVERVIEW_LIMIT=0`` (o un valor muy alto) en .env.
     CATALOG_OVERVIEW_LIMIT: int = int(os.getenv("CATALOG_OVERVIEW_LIMIT", "500"))
     LLM_REQUEST_TIMEOUT_SEC: float = float(os.getenv("LLM_REQUEST_TIMEOUT_SEC", "60"))
     LLM_MAX_DAILY_COST_USD: float = float(os.getenv("LLM_MAX_DAILY_COST_USD", "25"))
