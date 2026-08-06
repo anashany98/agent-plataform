@@ -72,8 +72,11 @@ class Settings(BaseSettings):
     CRITICAL_LLM_MODEL: str = os.getenv("CRITICAL_LLM_MODEL", "")
     # Número máximo de productos listados en la respuesta del chat cuando el
     # cliente pregunta algo genérico (catálogo overview). El LLM nunca genera
-    # esta lista: la produce `DeterministicToolsService.search_products`.
-    CATALOG_OVERVIEW_LIMIT: int = int(os.getenv("CATALOG_OVERVIEW_LIMIT", "20"))
+    # esta lista: la produce `DeterministicToolsService.search_products`. El
+    # valor por defecto (500) cubre catálogos completos incluso por encima del
+    # MVP inicial; el cap interno (1000) evita respuestas excesivamente largas
+    # en chats reales.
+    CATALOG_OVERVIEW_LIMIT: int = int(os.getenv("CATALOG_OVERVIEW_LIMIT", "500"))
     LLM_REQUEST_TIMEOUT_SEC: float = float(os.getenv("LLM_REQUEST_TIMEOUT_SEC", "60"))
     LLM_MAX_DAILY_COST_USD: float = float(os.getenv("LLM_MAX_DAILY_COST_USD", "25"))
     LLM_MAX_INPUT_BYTES: PositiveInt = int(os.getenv("LLM_MAX_INPUT_BYTES", "131072"))

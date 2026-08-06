@@ -234,16 +234,18 @@ def test_short_greeting_is_not_treated_as_product_inquiry(client):
 
 def test_catalog_overview_limit_is_configurable(client):
     """El número de productos listados en el resumen del catálogo respeta
-    el ajuste CATALOG_OVERVIEW_LIMIT (default 20). Si la base tiene menos
+    el ajuste CATALOG_OVERVIEW_LIMIT (default 500). Si la base tiene menos
     productos no se inventan, simplemente se devuelven los que haya.
     """
 
     from app.config import settings
 
-    expected_limit = max(1, min(int(settings.CATALOG_OVERVIEW_LIMIT), 200))
+    expected_limit = max(1, min(int(settings.CATALOG_OVERVIEW_LIMIT), 1000))
     payload = quote_message(9111, 'tienes algo exótico?')
     response = signed(client, payload)
     assert response.status_code == 200, response.text
     body = response.json()
     assert body['action'] == 'catalog_overview'
     assert len(body['products']) <= expected_limit
+    # El default actual debe permitir agotar todo el catálogo sincronizado.
+    assert expected_limit >= 300
