@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     ADVANCED_LLM_MODEL: str = os.getenv("ADVANCED_LLM_MODEL", "")
     CRITICAL_LLM_PROVIDER: str = os.getenv("CRITICAL_LLM_PROVIDER", "anthropic")
     CRITICAL_LLM_MODEL: str = os.getenv("CRITICAL_LLM_MODEL", "")
+    # Número máximo de productos listados en la respuesta del chat cuando el
+    # cliente pregunta algo genérico (catálogo overview). El LLM nunca genera
+    # esta lista: la produce `DeterministicToolsService.search_products`.
+    CATALOG_OVERVIEW_LIMIT: int = int(os.getenv("CATALOG_OVERVIEW_LIMIT", "20"))
     LLM_REQUEST_TIMEOUT_SEC: float = float(os.getenv("LLM_REQUEST_TIMEOUT_SEC", "60"))
     LLM_MAX_DAILY_COST_USD: float = float(os.getenv("LLM_MAX_DAILY_COST_USD", "25"))
     LLM_MAX_INPUT_BYTES: PositiveInt = int(os.getenv("LLM_MAX_INPUT_BYTES", "131072"))

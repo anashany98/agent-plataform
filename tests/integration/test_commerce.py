@@ -230,3 +230,20 @@ def test_short_greeting_is_not_treated_as_product_inquiry(client):
     body = response.json()
     assert body['action'] != 'catalog_overview'
     assert body['action'] != 'verified_product_recommendations'
+
+
+def test_catalog_overview_limit_is_configurable(client):
+    """El número de productos listados en el resumen del catálogo respeta
+    el ajuste CATALOG_OVERVIEW_LIMIT (default 20). Si la base tiene menos
+    productos no se inventan, simplemente se devuelven los que haya.
+    """
+
+    from app.config import settings
+
+    expected_limit = max(1, min(int(settings.CATALOG_OVERVIEW_LIMIT), 200))
+    payload = quote_message(9111, 'tienes algo exótico?')
+    response = signed(client, payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['action'] == 'catalog_overview'
+    assert len(body['products']) <= expected_limit

@@ -1376,8 +1376,11 @@ async def receive_chatwoot_webhook(
                 # Si la consulta es de catálogo pero no hay coincidencias
                 # específicas (p. ej. "¿qué tenéis?", "¿qué me recomiendas?"),
                 # se ofrece un resumen del catálogo sincronizado desde
-                # PrestaShop en lugar de transferir al equipo comercial.
-                verified_products = tools.search_products("", limit=8)
+                # PrestaShop en lugar de transferir al equipo comercial. El
+                # límite es configurable vía CATALOG_OVERVIEW_LIMIT (default
+                # 20) y el LLM nunca genera esta lista.
+                overview_limit = max(1, min(int(getattr(settings, "CATALOG_OVERVIEW_LIMIT", 20) or 20), 200))
+                verified_products = tools.search_products("", limit=overview_limit)
                 if verified_products:
                     lines = []
                     for product in verified_products:
