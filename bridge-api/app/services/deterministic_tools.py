@@ -214,6 +214,12 @@ class DeterministicToolsService:
             if normalized_query and normalized_query in haystack:
                 score += 15
             score += int(20 * len(matched) / len(tokens))
+            # Umbral mínimo: descartamos matches con score muy bajo para
+            # evitar falsos positivos por sub-cadenas débiles (p. ej.
+            # "hola" → "holandesa"). El umbral 10 equivale a 1 match en
+            # nombre o sku, o varios matches débiles pero consistentes.
+            if score < 10:
+                continue
             scored.append((score, name, product))
 
         scored.sort(key=lambda item: (-item[0], item[1]))

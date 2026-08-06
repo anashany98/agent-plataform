@@ -723,6 +723,47 @@ def _humanize_category(category: str) -> str:
     return labels.get(category, category)
 
 
+def _is_greeting(content: str) -> bool:
+    """Devuelve True si el mensaje es un saludo corto sin intención de
+    producto. El chat debe responder con una bienvenida, NO con un
+    listado de productos. Evita falsos positivos del estilo
+    ``\"hola\"`` → ``\"hola\"`` es substring de ``\"holandesa\"``.
+    """
+    if not content:
+        return False
+    normalized = re.sub(r"[^a-záéíóúñü ]+", " ", content.lower()).strip()
+    if not normalized:
+        return False
+    # Saludo si el mensaje tiene <= 4 palabras y todas están en la lista.
+    greetings = {
+        "hola", "buenas", "buenos", "buen", "saludos", "saludo",
+        "qué tal", "que tal", "hey", "hi", "hello", "alo", "aló",
+        "buenos dias", "buenas tardes", "buenas noches",
+        "buenos días", "buenas tardes", "buenas noches",
+    }
+    tokens = normalized.split()
+    if len(tokens) <= 5 and all(t in greetings or t in {"y", "e", "o", "u"} for t in tokens):
+        return True
+    # Mensajes tipo "hola, buenos días"
+    if len(tokens) <= 6 and any(t in greetings for t in tokens) and not any(
+        _PRODUCT_INQUIRY_TOKENS.__contains__(t) or _DOMAIN_HINTS_HIT(t)
+        for t in tokens
+    ):
+        return True
+    return False
+
+
+def _DOMAIN_HINTS_HIT(token: str) -> bool:
+    """Devuelve True si ``token`` está en cualquier synonym set de
+    :data:`_DOMAIN_HINTS`. Usado por :func:`_is_greeting` para
+    distinguir saludos de consultas de catálogo.
+    """
+    for synonyms in _DOMAIN_HINTS.values():
+        if token in synonyms:
+            return True
+    return False
+
+
 def _is_full_catalog_request(content: str) -> bool:
     """Devuelve True si el cliente pide TODO el catálogo completo.
 
@@ -1619,6 +1660,7 @@ async def receive_chatwoot_webhook(
         else:
             # El chat es un asistente comercial: recomienda, busca rápido
             # y compara, NUNCA lista el catálogo entero. Cap efectivo
+            # y compara, NUNCA lista el catálogo entero. Cap efectivo
             # configurable vía CATALOG_OVERVIEW_LIMIT (default 5). El cap
             # interno (10_000) es solo salvaguarda; el chat comercial no
             # debe acercarse a él.
@@ -1629,6 +1671,29 @@ async def receive_chatwoot_webhook(
             domain_hint = _extract_domain_hint(content) if product_inquiry else None
             full_catalog_request = _is_full_catalog_request(content)
             comparison_request = _is_comparison_request(content)
+
+            # ----------------------------------------------------------------
+            # MODO 0: Saludo corto ("hola", "buenas tardes", ...).
+            #         El chat responde con bienvenida, no busca productos.
+            #         Evita falsos positivos tipo "Hola" → "holandesa".
+            # ----------------------------------------------------------------
+            if _is_greeting(content):
+                reply = (
+                    "¡Hola! Soy el asistente de la tienda. "
+                    "Dime qué buscas (por ejemplo: \"tienes blocs de "
+                    "dibujo?\" o \"muéstrame material de oficina\") y "
+                    "te ayudo a encontrarlo. Si quieres, también "
+                    "puedes preguntarme \"qué tenéis\" para ver un "
+                    "resumen del catálogo."
+                )
+                await _safe_chat_reply(db, account_id, conversation_id, reply)
+                result = {
+                    "status": "success",
+                    "action": "greeting",
+                    "reply": reply,
+                }
+                _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                return result
 
             # ----------------------------------------------------------------
             # MODO 1: Comparación ("compara X y Y", "X vs Y",
@@ -1734,6 +1799,32 @@ async def receive_chatwoot_webhook(
                     result = {
                         "status": "success",
                         "action": "catalog_empty_handoff",
+                        "reply": reply,
+                    }
+                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                    return result
+                # Si hay dominio (categoría) pero no hay productos en
+                # esa categoría, decimos claramente "no tenemos X" y
+                # redirigimos al catálogo general; NUNCA mostramos
+                # productos no relacionados como si fueran de esa
+                # categoría.
+                if domain_hint and not scoped_products and not specific_products:
+                    catalog_summary = await _build_catalog_categories_summary(
+                        db, tools=tools, limit=overview_limit
+                    )
+                    reply = (
+                        f"De momento no tenemos {_humanize_category(domain_hint)} en el catálogo. "
+                        f"Tenemos {catalog_summary['total']} productos en "
+                        f"{catalog_summary['n_categories']} categorías distintas. "
+                        "¿Quieres que te muestre las que sí tenemos o "
+                        "prefieres hablar con un comercial?\n\n"
+                        f"{catalog_summary['breakdown']}"
+                    )
+                    await _safe_chat_reply(db, account_id, conversation_id, reply)
+                    result = {
+                        "status": "success",
+                        "action": "category_empty",
+                        "domain": domain_hint,
                         "reply": reply,
                     }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
