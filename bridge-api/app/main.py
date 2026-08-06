@@ -1436,7 +1436,13 @@ async def receive_chatwoot_webhook(
             # matchea y la IA responde con esos productos verificados.
             specific_products: List[Dict[str, Any]] = []
             if not domain_hint:
-                specific_products = tools.search_products(content, limit=3)
+                # El chat solo expone al cliente productos PrestaShop
+                # (catálogo real de la tienda). Las recomendaciones
+                # puntuales también filtran por source='prestashop' para
+                # no sugerir productos de staging al usuario final.
+                specific_products = tools.search_products(
+                    content, limit=3, source="prestashop"
+                )
 
             # Búsqueda scoped por categoría cuando hay domain hint. Tiene
             # precedencia sobre los matches específicos para evitar falsos
