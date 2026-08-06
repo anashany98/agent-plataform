@@ -1664,7 +1664,7 @@ async def receive_chatwoot_webhook(
             # configurable vía CATALOG_OVERVIEW_LIMIT (default 5). El cap
             # interno (10_000) es solo salvaguarda; el chat comercial no
             # debe acercarse a él.
-            raw_limit = int(getattr(settings, "CATALOG_OVERVIEW_LIMIT", 5) or 5)
+            raw_limit = int(getattr(settings, "CATALOG_OVERVIEW_LIMIT", 500) or 500)
             overview_limit = max(1, min(raw_limit, 10_000))
 
             product_inquiry = _looks_like_product_inquiry(content)
@@ -1721,33 +1721,50 @@ async def receive_chatwoot_webhook(
 
             # ----------------------------------------------------------------
             # MODO 2: "todo el catálogo" / "todos los productos".
-            #   En vez de volcar los productos, redirigimos a la web
-            #   oficial y mostramos las categorías principales para que
-            #   el cliente refine su búsqueda. Esto es exactamente lo
-            #   que esperaría un comercial humano.
+            #   El chat responde con TODOS los productos PrestaShop
+            #   sincronizados. Sin cap, sin redirect, sin filtro por
+            #   categoría: el cliente ha pedido verlo todo y eso es
+            #   exactamente lo que entregamos. Si el catálogo crece
+            #   por encima del cap interno (10_000) mostraremos
+            #   hasta ese límite con una nota al final.
             # ----------------------------------------------------------------
             if full_catalog_request:
-                catalog_summary = await _build_catalog_categories_summary(
-                    db, tools=tools, limit=overview_limit
+                verified_products = tools.search_products(
+                    "", limit=overview_limit, source="prestashop"
                 )
-                reply = (
-                    "Tenemos un catálogo extenso sincronizado desde PrestaShop "
-                    f"con {catalog_summary['total']} productos. Para que "
-                    "puedas navegarlo cómodamente te paso el enlace al "
-                    "catálogo completo y un resumen por categorías:\n\n"
-                    f"{catalog_summary['breakdown']}\n\n"
-                    "¿Cuál te interesa? Dime la categoría o el tipo de "
-                    "producto que buscas y te ayudo a encontrarlo."
-                )
-                await _safe_chat_reply(db, account_id, conversation_id, reply)
-                result = {
-                    "status": "success",
-                    "action": "catalog_redirect",
-                    "domain": domain_hint,
-                    "reply": reply,
-                }
-                _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
-                return result
+                if verified_products:
+                    lines = []
+                    for product in verified_products:
+                        availability = (
+                            f"{product['available_stock']} disponibles"
+                            if product["available_stock"] > 0
+                            else "sin existencias disponibles"
+                        )
+                        lines.append(
+                            f"• {product['name']} ({product['sku']}): "
+                            f"{product['unit_price']:.2f} {settings.CURRENCY}, {availability}."
+                        )
+                    reply = (
+                        f"Estos son los {len(verified_products)} productos "
+                        "que tenemos sincronizados desde PrestaShop:\n"
+                        + "\n".join(lines)
+                    )
+                    if len(verified_products) >= overview_limit:
+                        reply += (
+                            f"\n\n(He mostrado los primeros {overview_limit} "
+                            "productos. Si quieres ver más, dime una "
+                            "categoría o un tipo concreto y te ayudo.)"
+                        )
+                    await _safe_chat_reply(db, account_id, conversation_id, reply)
+                    result = {
+                        "status": "success",
+                        "action": "catalog_full_list",
+                        "domain": domain_hint,
+                        "products": verified_products,
+                        "reply": reply,
+                    }
+                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                    return result
 
             # ----------------------------------------------------------------
             # Búsqueda específica: primero intentamos scoped por categoría
@@ -1777,9 +1794,10 @@ async def receive_chatwoot_webhook(
                 verified_products = specific_products
                 action_label = "verified_product_recommendations"
             elif product_inquiry:
-                # Sin matches específicos: mostramos las categorías
-                # principales y un top-3 muy breve para que el cliente
-                # sepa qué tenemos sin saturar la conversación.
+                # Sin matches específicos en el contenido, mostramos
+                # TODOS los productos PrestaShop (no top-N). El
+                # cliente ha hecho una pregunta de catálogo y la
+                # respuesta debe incluir el catálogo real completo.
                 verified_products = tools.search_products(
                     "", limit=overview_limit, source="prestashop"
                 )
@@ -1805,31 +1823,45 @@ async def receive_chatwoot_webhook(
                     return result
                 # Si hay dominio (categoría) pero no hay productos en
                 # esa categoría, decimos claramente "no tenemos X" y
-                # redirigimos al catálogo general; NUNCA mostramos
-                # productos no relacionados como si fueran de esa
-                # categoría.
+                # devolvemos TODOS los productos PrestaShop como
+                # alternativa (no un top-N limitado).
                 if domain_hint and not scoped_products and not specific_products:
                     catalog_summary = await _build_catalog_categories_summary(
                         db, tools=tools, limit=overview_limit
                     )
-                    reply = (
+                    header = (
                         f"De momento no tenemos {_humanize_category(domain_hint)} en el catálogo. "
                         f"Tenemos {catalog_summary['total']} productos en "
                         f"{catalog_summary['n_categories']} categorías distintas. "
-                        "¿Quieres que te muestre las que sí tenemos o "
-                        "prefieres hablar con un comercial?\n\n"
-                        f"{catalog_summary['breakdown']}"
+                        "Aquí tienes todo el catálogo disponible:\n"
+                    )
+                    # Renderizamos TODOS los productos.
+                    lines = []
+                    for product in verified_products:
+                        availability = (
+                            f"{product['available_stock']} disponibles"
+                            if product["available_stock"] > 0
+                            else "sin existencias disponibles"
+                        )
+                        lines.append(
+                            f"• {product['name']} ({product['sku']}): "
+                            f"{product['unit_price']:.2f} {settings.CURRENCY}, {availability}."
+                        )
+                    reply = header + "\n".join(lines) + (
+                        "\n\n¿Quieres hablar con un comercial o prefieres "
+                        "que te ayude a buscar otra cosa?"
                     )
                     await _safe_chat_reply(db, account_id, conversation_id, reply)
                     result = {
                         "status": "success",
                         "action": "category_empty",
                         "domain": domain_hint,
+                        "products": verified_products,
                         "reply": reply,
                     }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
                     return result
-                action_label = "catalog_browse_prompt"
+                action_label = "catalog_full_list"
             else:
                 # Sin coincidencias y sin intención de catálogo: caemos a
                 # RAG/handoff.
@@ -1857,30 +1889,14 @@ async def receive_chatwoot_webhook(
                     footer = (
                         "¿Te interesa alguna? Dime cuál y la cantidad y preparo una solicitud de presupuesto."
                     )
-                elif action_label == "catalog_browse_prompt":
-                    # Sugerencia de categorías + top-N breve.
-                    breakdown = _build_categories_brief(db, tools=tools, limit=overview_limit)
+                elif action_label == "catalog_full_list":
                     header = (
-                        f"Tenemos {breakdown['total']} productos en "
-                        f"{breakdown['n_categories']} categorías. "
-                        "Estas son nuestras más populares:\n"
+                        f"Estos son los {len(verified_products)} productos "
+                        "que tenemos sincronizados desde PrestaShop:\n"
                     )
                     footer = (
-                        "\nDime qué necesitas (p. ej. \"blocs de dibujo\", "
-                        "\"material de oficina\") y te hago una selección personalizada."
-                    )
-                    return await _safe_chat_reply_with_categories(
-                        db,
-                        account_id=account_id,
-                        conversation_id=conversation_id,
-                        idempotency_key=idempotency_key,
-                        claim_owner=claim_owner,
-                        header=header,
-                        lines=lines,
-                        footer=footer,
-                        action_label=action_label,
-                        domain_hint=domain_hint,
-                        verified_products=verified_products,
+                        "\n¿Quieres que compare alguno, te prepare un "
+                        "presupuesto o tienes alguna otra consulta?"
                     )
                 else:
                     header = "Estas son las opciones verificadas disponibles en el catálogo:\n"

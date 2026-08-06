@@ -71,14 +71,12 @@ class Settings(BaseSettings):
     CRITICAL_LLM_PROVIDER: str = os.getenv("CRITICAL_LLM_PROVIDER", "anthropic")
     CRITICAL_LLM_MODEL: str = os.getenv("CRITICAL_LLM_MODEL", "")
     # Número máximo de productos que el chat lista en una respuesta.
-    # El chat es un asistente comercial: debe recomendar y comparar, no
-    # volcar catálogos. Por defecto 5 (recomendaciones puntuales); un
-    # operador puede subirlo temporalmente vía env (p. ej. ``=8``) pero
-    # no es recomendable superar 10 en respuestas de chat. El LLM nunca
-    # genera esta lista: la produce ``DeterministicToolsService.
-    # search_products``. El cap interno (10_000) existe solo como
-    # salvaguarda; el chat comercial nunca debe acercarse a él.
-    CATALOG_OVERVIEW_LIMIT: int = int(os.getenv("CATALOG_OVERVIEW_LIMIT", "5"))
+    # El cliente exige ver TODOS los productos PrestaShop cuando
+    # pregunta por el catálogo, así que el default es 500 (cubre el
+    # MVP y sobra). El cap interno (10_000) existe solo como
+    # salvaguarda. Configurable vía env. El LLM nunca genera esta
+    # lista: la produce ``DeterministicToolsService.search_products``.
+    CATALOG_OVERVIEW_LIMIT: int = int(os.getenv("CATALOG_OVERVIEW_LIMIT", "500"))
     LLM_REQUEST_TIMEOUT_SEC: float = float(os.getenv("LLM_REQUEST_TIMEOUT_SEC", "60"))
     LLM_MAX_DAILY_COST_USD: float = float(os.getenv("LLM_MAX_DAILY_COST_USD", "25"))
     LLM_MAX_INPUT_BYTES: PositiveInt = int(os.getenv("LLM_MAX_INPUT_BYTES", "131072"))
