@@ -136,11 +136,27 @@ class DeterministicToolsService:
         limit: int = 50,
         *,
         include_demo: bool = False,
+        source: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
+        """Busca productos verificados del catálogo local.
+
+        Args:
+            query: Texto libre para matchear nombre/SKU/categoría/attrs.
+            limit: Tamaño máximo del resultado (clamped a 1..200).
+            include_demo: Si True, incluye productos demo (sólo en tests).
+            source: Si se especifica (p. ej. ``"prestashop"``), filtra
+                únicamente productos con ese origen. Útil para que las
+                respuestas de catálogo en el chat expongan sólo lo
+                realmente disponible en la tienda y excluyan productos
+                sintéticos locales o importados de pruebas internas.
+        """
         safe_limit = max(1, min(limit, 200))
         product_query = self.db.query(Product)
         if not include_demo:
             product_query = product_query.filter(self._non_demo_product_clause())
+        if source:
+            normalized_source = func.lower(func.trim(Product.source))
+            product_query = product_query.filter(normalized_source == str(source).strip().lower())
         if not query.strip():
             products = product_query.order_by(Product.name.asc()).limit(5_000).all()
             visible_products = [

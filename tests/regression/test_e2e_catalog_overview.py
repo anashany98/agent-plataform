@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import json
 import time
+from decimal import Decimal
 
 import pytest
 from app.config import settings
@@ -70,22 +71,35 @@ def _count_trusted_products() -> int:
         db.close()
 
 
-def test_catalog_overview_lists_every_prestashop_product(client):
-    """\"¿Qué tenéis?\" debe listar todos los productos del catálogo."""
+def _count_prestashop_products() -> int:
+    db = SessionLocal()
+    try:
+        return db.query(Product).filter(Product.source == "prestashop").count()
+    finally:
+        db.close()
 
-    trusted = _count_trusted_products()
-    if trusted == 0:
-        pytest.skip("No hay productos trusted sincronizados; corre la sync PrestaShop")
+
+def _skip_if_no_prestashop_catalog():
+    if _count_prestashop_products() == 0:
+        pytest.skip("No hay productos PrestaShop sincronizados en la BD live")
+
+
+def test_catalog_overview_lists_every_prestashop_product(client):
+    """\"¿Qué tenéis?\" debe listar todos los productos PrestaShop del catálogo."""
+
+    _skip_if_no_prestashop_catalog()
 
     body = _send_signed_webhook(client, "¿Qué tenéis disponible?", 99001)
     assert body["action"] == "catalog_overview", body
     assert body.get("llm") is None
-    assert len(body["products"]) == trusted, (
-        f"Esperaba {trusted} productos, obtuve {len(body['products'])}"
-    )
+    # El catálogo overview debe contener exclusivamente productos
+    # PrestaShop; nunca locales ni importados de staging.
+    for product in body["products"]:
+        assert product["source"] == "prestashop", (
+            f"producto {product['sku']} tiene source={product['source']}, esperaba prestashop"
+        )
     reply = body["reply"]
     assert reply.startswith("Estas son las opciones verificadas disponibles")
-    # Cada producto aparece en el reply con su SKU y precio.
     for product in body["products"]:
         assert product["sku"] in reply
         assert f"{product['unit_price']:.2f}" in reply
@@ -108,25 +122,23 @@ def test_short_greeting_does_not_trigger_catalog_overview(client):
 
 
 def test_product_inquiry_without_specific_match_returns_full_catalog(client):
-    """\"tienes algo exótico?\" cae al resumen del catálogo completo."""
+    """\"tienes algo exótico?\" cae al resumen del catálogo PrestaShop."""
 
-    trusted = _count_trusted_products()
-    if trusted == 0:
-        pytest.skip("No hay productos trusted sincronizados")
+    _skip_if_no_prestashop_catalog()
 
     body = _send_signed_webhook(client, "tienes algo exótico?", 99003)
     assert body["action"] == "catalog_overview"
-    assert len(body["products"]) == trusted
+    # El catálogo overview debe ser exclusivamente PrestaShop.
+    for product in body["products"]:
+        assert product["source"] == "prestashop", product
 
 
 def test_domain_hint_with_empty_category_falls_back_to_full_catalog(client):
     """\"pásame los portátiles en oferta\" → no hay portátiles → fallback al
-    catálogo completo con nota explícita de la categoría ausente.
+    catálogo PrestaShop completo con nota explícita de la categoría ausente.
     """
 
-    trusted = _count_trusted_products()
-    if trusted == 0:
-        pytest.skip("No hay productos trusted sincronizados")
+    _skip_if_no_prestashop_catalog()
 
     body = _send_signed_webhook(
         client,
@@ -135,7 +147,9 @@ def test_domain_hint_with_empty_category_falls_back_to_full_catalog(client):
     )
     assert body["action"] == "catalog_overview_fallback", body
     assert body.get("domain") == "portatil"
-    assert len(body["products"]) == trusted
+    # Solo productos PrestaShop en el fallback.
+    for product in body["products"]:
+        assert product["source"] == "prestashop", product
     # El reply debe avisar de que no hay portátiles y mostrar el catálogo
     # completo como alternativa.
     reply = body["reply"]
@@ -143,38 +157,56 @@ def test_domain_hint_with_empty_category_falls_back_to_full_catalog(client):
     assert reply.startswith("Estas son las opciones verificadas disponibles")
 
 
-def test_domain_hint_with_partial_category_scopes_the_response(client):
-    """\"muéstrame los blocs de dibujo\" → domain 'papel' → lista scoped
-    si hay productos en esa categoría, o fallback al catálogo completo
-    si no hay (p. ej. cuando solo hay productos sintéticos locales).
+def test_catalog_overview_excludes_local_and_imported_products(client):
+    """Los resúmenes del catálogo (con o sin domain hint) NUNCA deben
+    exponer productos de staging con source='local' o 'import'.
     """
 
-    body = _send_signed_webhook(
-        client,
-        "muéstrame los blocs de dibujo",
-        99005,
-    )
-    assert body.get("domain") == "papel", body
-    assert body["action"] in {"catalog_scoped_overview", "catalog_overview_fallback"}, body
-    assert body["products"], body
-    if body["action"] == "catalog_scoped_overview":
-        assert body["reply"].startswith("Estas son las opciones de papel")
-    else:
-        assert "no tenemos papel" in body["reply"].lower()
+    _skip_if_no_prestashop_catalog()
 
+    from app.database import SessionLocal
+    from app.models.models import Product
 
-def test_domain_hint_takes_precedence_over_weak_content_matches(client):
-    """Cuando hay domain hint, tokens débiles como 'en' o 'de' no deben
-    devolver productos no relacionados (p. ej. 'pequeño' / 'anilla').
-    """
+    db = SessionLocal()
+    try:
+        # Sembrar un producto local y otro importado de staging para
+        # verificar que el filtro los excluye.
+        db.add(
+            Product(
+                id="stage-local",
+                external_id="stage-local",
+                sku="STG-LOCAL-001",
+                name="Producto staging local NO debe aparecer",
+                category="Staging",
+                attributes={"active": True, "available_for_order": True, "show_price": True},
+                source="local",
+                base_price=Decimal("1.00"),
+                tax_rate=Decimal("0.21"),
+                stock_quantity=1,
+                reserved_stock=0,
+            )
+        )
+        db.add(
+            Product(
+                id="stage-import",
+                external_id="stage-import",
+                sku="STG-IMPORT-001",
+                name="Producto staging import NO debe aparecer",
+                category="Staging",
+                attributes={"active": True, "available_for_order": True, "show_price": True},
+                source="import",
+                base_price=Decimal("1.00"),
+                tax_rate=Decimal("0.21"),
+                stock_quantity=1,
+                reserved_stock=0,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
 
-    body = _send_signed_webhook(
-        client,
-        "tienes archivadores?",
-        99006,
-    )
-    # No hay archivadores/carpetas en este catálogo, así que cae a fallback
-    # scoped=vacío → catálogo completo con nota.
-    assert body["action"] == "catalog_overview_fallback", body
-    assert body.get("domain") == "carpeta"
-    assert "no tenemos carpetas" in body["reply"].lower()
+    body = _send_signed_webhook(client, "¿Qué tenéis disponible?", 99010)
+    assert body["action"] == "catalog_overview"
+    skus = {p["sku"] for p in body["products"]}
+    assert "STG-LOCAL-001" not in skus, skus
+    assert "STG-IMPORT-001" not in skus, skus

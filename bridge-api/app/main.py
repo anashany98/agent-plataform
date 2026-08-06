@@ -1448,22 +1448,29 @@ async def receive_chatwoot_webhook(
                 scoped_products = tools.search_products(
                     _humanize_category(domain_hint),
                     limit=overview_limit,
+                    source="prestashop",
                 )
 
             if scoped_products:
-                # Coincidencias por categoría: lista verificada y scoped.
+                # Coincidencias por categoría: lista verificada y scoped
+                # sólo con productos PrestaShop (catálogo real de la tienda).
                 verified_products = scoped_products
                 action_label = "catalog_scoped_overview"
             elif specific_products:
                 # Coincidencias por contenido sin dominio: lista de
-                # recomendaciones puntuales.
+                # recomendaciones puntuales (puede incluir productos
+                # importados o locales relevantes).
                 verified_products = specific_products
                 action_label = "verified_product_recommendations"
             elif product_inquiry:
                 # Sin coincidencias pero la pregunta es de catálogo:
-                # mostramos el catálogo completo (o un fallback con nota
-                # si había domain hint).
-                verified_products = tools.search_products("", limit=overview_limit)
+                # mostramos el catálogo completo de PrestaShop (o un
+                # fallback con nota si había domain hint).
+                verified_products = tools.search_products(
+                    "",
+                    limit=overview_limit,
+                    source="prestashop",
+                )
                 if not verified_products:
                     reply = (
                         "De momento no tenemos productos verificables en el catálogo. "
