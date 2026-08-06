@@ -2842,9 +2842,17 @@ async def sync_prestashop_products(
             Product.external_id == remote["external_id"], Product.source == "prestashop"
         ).first()
         if not product:
-            sku = remote["sku"]
-            if db.query(Product).filter(Product.sku == sku).first():
+            raw_sku = (remote.get("sku") or "").strip()
+            # Si el SKU viene vacío o es el placeholder "0" de
+            # PrestaShop (producto sin SKU), usamos PS-{external_id}
+            # para garantizar unicidad y evitar choques con otros
+            # productos sin SKU.
+            if not raw_sku or raw_sku == "0":
                 sku = f"PS-{remote['external_id']}"
+            else:
+                sku = raw_sku
+                if db.query(Product).filter(Product.sku == sku).first():
+                    sku = f"PS-{remote['external_id']}"
             db.add(
                 Product(
                     id=f"ps-{remote['external_id']}",
