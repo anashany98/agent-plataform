@@ -1521,6 +1521,12 @@ async def receive_chatwoot_webhook(
         _heartbeat_idempotency(db, idempotency_key, claim_owner)
         lowered = content.lower()
         confirmation_token = _extract_confirmation_token(content)
+        # ``result`` se asigna en cada rama que produce respuesta. Lo
+        # inicializamos para que el _complete_idempotency final no
+        # falle con UnboundLocalError si ninguna rama escribió un
+        # resultado (caso muy raro: trigger-keyword sin match y
+        # ningún producto).
+        result: Optional[Dict[str, Any]] = None
         if any(term in lowered for term in ("humano", "persona", "comercial")):
             await _safe_chat_sideeffect(db, lambda: chatwoot_adapter.toggle_human_handoff(int(account_id), int(conversation_id), "open"), label="handoff_open", account_id=account_id, conversation_id=conversation_id)
             await _safe_chat_sideeffect(db, lambda: chatwoot_adapter.assign_human_handoff(int(account_id), int(conversation_id)), label="handoff_assign", account_id=account_id, conversation_id=conversation_id)
@@ -1616,11 +1622,16 @@ async def receive_chatwoot_webhook(
                 db.commit()
             products = tools.search_products(query, limit=10)
             if not products:
-                reply = "No he encontrado un producto verificable que coincida con tu necesidad. Te transfiero al equipo comercial."
-                await _safe_chat_reply(db, account_id, conversation_id, reply)
-                result = {"status": "success", "action": "no_product_found", "reply": reply}
-                _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                # El cliente usó un trigger keyword ("necesito",
+                # "comprar", ...) pero NO hay producto específico
+                # que coincida con su mensaje (p. ej. "necesito algo
+                # para archivar documentos"). Marcamos el flag para
+                # que el resto del flujo (else) caiga al catálogo +
+                # LLM y NO a un handoff. El LLM interpreta la
+                # intención real y responde con productos relevantes.
+                _trigger_fallback_to_else = True
             else:
+                _trigger_fallback_to_else = False
                 product = products[0]
                 stock = tools.check_stock(product["id"], qty)
                 if not stock["available"]:
@@ -1658,6 +1669,22 @@ async def receive_chatwoot_webhook(
                     }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
         else:
+            # Si el branch de trigger-keyword cayó en "no hay
+            # producto específico", cargamos los productos del
+            # catálogo PrestaShop para que el LLM responda con
+            # contexto útil (en lugar de transferir al comercial).
+            if locals().get("_trigger_fallback_to_else"):
+                raw_limit = int(getattr(settings, "CATALOG_OVERVIEW_LIMIT", 500) or 500)
+                overview_limit = max(1, min(raw_limit, 10_000))
+                verified_products = tools.search_products(
+                    "", limit=overview_limit, source="prestashop"
+                )
+                action_label = "catalog_browse_prompt"
+                _trigger_fallback_to_else = False
+                # Saltamos al bloque de construcción de respuesta con LLM.
+                _build_llm_reply = True
+            else:
+                _build_llm_reply = False
             # El chat es un asistente comercial: recomienda, busca rápido
             # y compara, NUNCA lista el catálogo entero. Cap efectivo
             # y compara, NUNCA lista el catálogo entero. Cap efectivo
@@ -2016,6 +2043,11 @@ async def receive_chatwoot_webhook(
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
 
         _heartbeat_idempotency(db, idempotency_key, claim_owner)
+        # Si ninguna rama escribió un resultado (caso raro: trigger-keyword
+        # sin producto específico y ningún branch posterior) usamos un
+        # dict vacío para no romper la idempotencia.
+        if result is None:
+            result = {"status": "ignored", "reason": "no_branch_matched"}
         _complete_idempotency(db, idempotency_key, claim_owner, result)
         return result
     except (ChatwootIntegrationError, GHLIntegrationError) as exc:
