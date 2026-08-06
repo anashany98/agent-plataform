@@ -117,3 +117,64 @@ def test_product_inquiry_without_specific_match_returns_full_catalog(client):
     body = _send_signed_webhook(client, "tienes algo exótico?", 99003)
     assert body["action"] == "catalog_overview"
     assert len(body["products"]) == trusted
+
+
+def test_domain_hint_with_empty_category_falls_back_to_full_catalog(client):
+    """\"pásame los portátiles en oferta\" → no hay portátiles → fallback al
+    catálogo completo con nota explícita de la categoría ausente.
+    """
+
+    trusted = _count_trusted_products()
+    if trusted == 0:
+        pytest.skip("No hay productos trusted sincronizados")
+
+    body = _send_signed_webhook(
+        client,
+        "pásame los portátiles en oferta que tengáis",
+        99004,
+    )
+    assert body["action"] == "catalog_overview_fallback", body
+    assert body.get("domain") == "portatil"
+    assert len(body["products"]) == trusted
+    # El reply debe avisar de que no hay portátiles y mostrar el catálogo
+    # completo como alternativa.
+    reply = body["reply"]
+    assert "no tenemos portátiles" in reply.lower()
+    assert reply.startswith("Estas son las opciones verificadas disponibles")
+
+
+def test_domain_hint_with_partial_category_scopes_the_response(client):
+    """\"muéstrame los blocs de dibujo\" → domain 'papel' → lista scoped
+    si hay productos en esa categoría, o fallback al catálogo completo
+    si no hay (p. ej. cuando solo hay productos sintéticos locales).
+    """
+
+    body = _send_signed_webhook(
+        client,
+        "muéstrame los blocs de dibujo",
+        99005,
+    )
+    assert body.get("domain") == "papel", body
+    assert body["action"] in {"catalog_scoped_overview", "catalog_overview_fallback"}, body
+    assert body["products"], body
+    if body["action"] == "catalog_scoped_overview":
+        assert body["reply"].startswith("Estas son las opciones de papel")
+    else:
+        assert "no tenemos papel" in body["reply"].lower()
+
+
+def test_domain_hint_takes_precedence_over_weak_content_matches(client):
+    """Cuando hay domain hint, tokens débiles como 'en' o 'de' no deben
+    devolver productos no relacionados (p. ej. 'pequeño' / 'anilla').
+    """
+
+    body = _send_signed_webhook(
+        client,
+        "tienes archivadores?",
+        99006,
+    )
+    # No hay archivadores/carpetas en este catálogo, así que cae a fallback
+    # scoped=vacío → catálogo completo con nota.
+    assert body["action"] == "catalog_overview_fallback", body
+    assert body.get("domain") == "carpeta"
+    assert "no tenemos carpetas" in body["reply"].lower()

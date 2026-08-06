@@ -644,6 +644,28 @@ _PRODUCT_INQUIRY_TOKENS = frozenset({
 })
 
 
+# Categorías/dominios que el chat reconoce para hacer una búsqueda scoped
+# antes de devolver el catálogo completo. Cuando el cliente nombra uno de
+# estos términos se busca primero en el catálogo con ese término; si hay
+# coincidencias se muestran solo esas; si no, se avisa y se ofrece el
+# catálogo completo como alternativa.
+_DOMAIN_HINTS: Dict[str, frozenset[str]] = {
+    "portatil": frozenset({"portatil", "portatiles", "portátil", "portátiles", "laptop", "laptops", "ordenador", "ordenadores", "notebook", "notebooks"}),
+    "movil": frozenset({"movil", "moviles", "móvil", "móviles", "smartphone", "telefono", "telefonos"}),
+    "impresora": frozenset({"impresora", "impresoras", "escaner", "escáner", "escaneres"}),
+    "toner": frozenset({"toner", "tóner", "tinta", "tintas", "cartucho", "cartuchos"}),
+    "papel": frozenset({"papel", "folios", "hoja", "hojas", "bloc", "blocs"}),
+    "cuaderno": frozenset({"cuaderno", "cuadernos", "libreta", "libretas", "agenda", "agendas"}),
+    "boligrafo": frozenset({"boligrafo", "bolígrafos", "bolígrafo", "bolígrafos", "lapicero", "lapiceros", "rotulador", "rotuladores"}),
+    "carpeta": frozenset({"carpeta", "carpetas", "archivador", "archivadores", "folder"}),
+    "oficina": frozenset({"oficina", "escritorio", "escritorios", "trabajo"}),
+    "silla": frozenset({"silla", "sillas", "butaca", "butacas", "sillón", "sillones"}),
+    "mesa": frozenset({"mesa", "mesas"}),
+    "escolar": frozenset({"escolar", "colegio", "escolares", "infantil", "nene", "nena", "ninos", "niños", "ninas", "niñas"}),
+    "oferta": frozenset({"oferta", "ofertas", "promocion", "promociones", "rebajado", "rebajados", "descuento", "descuentos", "chollo", "chollos"}),
+}
+
+
 def _looks_like_product_inquiry(content: str) -> bool:
     """Devuelve True si el mensaje parece una pregunta sobre el catálogo.
 
@@ -654,18 +676,51 @@ def _looks_like_product_inquiry(content: str) -> bool:
     """
     if not content:
         return False
+    if _extract_domain_hint(content):
+        return True
     normalized = re.sub(r"[^a-záéíóúñü0-9 ]+", " ", content.lower())
     tokens = {token for token in normalized.split() if len(token) >= 3}
-    if tokens & _PRODUCT_INQUIRY_TOKENS:
-        return True
-    # Si el mensaje menciona un dominio concreto (silla, mesa, oficina...)
-    # también se considera consulta de catálogo para mostrar un resumen
-    # verificado antes de transferir al equipo comercial.
-    domain_hints = {"silla", "sillas", "mesa", "mesas", "oficina", "papel",
-                    "cuaderno", "cuadernos", "boligrafo", "bolígrafos",
-                    "carpeta", "carpetas", "tinta", "toner", "impresora",
-                    "ordenador", "portatil", "móvil", "movil"}
-    return bool(tokens & domain_hints)
+    return bool(tokens & _PRODUCT_INQUIRY_TOKENS)
+
+
+def _extract_domain_hint(content: str) -> Optional[str]:
+    """Devuelve la categoría dominante del mensaje o None si no hay.
+
+    Por ejemplo, \"pásame los portátiles en oferta\" -> 'portatil'.
+    Si hay varias categorías, devuelve la que aparezca primero en el texto.
+    El término se devuelve sin acento para emparejar con el índice de
+    categorías del catálogo.
+    """
+    if not content:
+        return None
+    normalized = re.sub(r"[^a-záéíóúñü0-9 ]+", " ", content.lower())
+    tokens = normalized.split()
+    for token in tokens:
+        for category, synonyms in _DOMAIN_HINTS.items():
+            if token in synonyms:
+                return category
+    return None
+
+
+def _humanize_category(category: str) -> str:
+    """Traduce el identificador de categoría a una etiqueta legible."""
+
+    labels = {
+        "portatil": "portátiles",
+        "movil": "móviles",
+        "impresora": "impresoras",
+        "toner": "tóner/tintas",
+        "papel": "papel",
+        "cuaderno": "cuadernos",
+        "boligrafo": "bolígrafos",
+        "carpeta": "carpetas",
+        "oficina": "oficina",
+        "silla": "sillas",
+        "mesa": "mesas",
+        "escolar": "escolar",
+        "oferta": "ofertas",
+    }
+    return labels.get(category, category)
 
 
 def _authoritative_prestashop_tax_rate(remote: Dict[str, Any]) -> Decimal:
@@ -1370,45 +1425,46 @@ async def receive_chatwoot_webhook(
             # producto generados libremente por un LLM. Primero se buscan
             # coincidencias verificadas en el catálogo local sincronizado con
             # PrestaShop y, después, evidencia documental pública.
-            verified_products = tools.search_products(content, limit=3)
+            raw_limit = int(getattr(settings, "CATALOG_OVERVIEW_LIMIT", 500) or 500)
+            overview_limit = max(1, min(raw_limit, 1000))
+
             product_inquiry = _looks_like_product_inquiry(content)
-            if not verified_products and product_inquiry:
-                # Si la consulta es de catálogo pero no hay coincidencias
-                # específicas (p. ej. "¿qué tenéis?", "¿qué me recomiendas?"),
-                # se ofrece un resumen del catálogo sincronizado desde
-                # PrestaShop en lugar de transferir al equipo comercial. El
-                # límite es configurable vía CATALOG_OVERVIEW_LIMIT (default
-                # 500) y el LLM nunca genera esta lista. El cap interno
-                # (1000) evita respuestas de chat inmanejables.
-                raw_limit = int(getattr(settings, "CATALOG_OVERVIEW_LIMIT", 500) or 500)
-                overview_limit = max(1, min(raw_limit, 1000))
+            domain_hint = _extract_domain_hint(content) if product_inquiry else None
+
+            # Búsqueda específica por el contenido completo (sin domain
+            # hint). Si el cliente dice "necesito una silla" el contenido
+            # matchea y la IA responde con esos productos verificados.
+            specific_products: List[Dict[str, Any]] = []
+            if not domain_hint:
+                specific_products = tools.search_products(content, limit=3)
+
+            # Búsqueda scoped por categoría cuando hay domain hint. Tiene
+            # precedencia sobre los matches específicos para evitar falsos
+            # positivos (p. ej. "pásame los portátiles en oferta" tiene
+            # tokens débiles "en"/"de"/"que" que casan con productos no
+            # relacionados como "anilla").
+            scoped_products: List[Dict[str, Any]] = []
+            if domain_hint:
+                scoped_products = tools.search_products(
+                    _humanize_category(domain_hint),
+                    limit=overview_limit,
+                )
+
+            if scoped_products:
+                # Coincidencias por categoría: lista verificada y scoped.
+                verified_products = scoped_products
+                action_label = "catalog_scoped_overview"
+            elif specific_products:
+                # Coincidencias por contenido sin dominio: lista de
+                # recomendaciones puntuales.
+                verified_products = specific_products
+                action_label = "verified_product_recommendations"
+            elif product_inquiry:
+                # Sin coincidencias pero la pregunta es de catálogo:
+                # mostramos el catálogo completo (o un fallback con nota
+                # si había domain hint).
                 verified_products = tools.search_products("", limit=overview_limit)
-                if verified_products:
-                    lines = []
-                    for product in verified_products:
-                        availability = (
-                            f"{product['available_stock']} disponibles"
-                            if product["available_stock"] > 0
-                            else "sin existencias disponibles"
-                        )
-                        lines.append(
-                            f"• {product['name']} ({product['sku']}): "
-                            f"{product['unit_price']:.2f} {settings.CURRENCY}, {availability}."
-                        )
-                    reply = (
-                        "Estas son las opciones verificadas disponibles en el catálogo:\n"
-                        + "\n".join(lines)
-                        + "\nSi te interesa alguna, dime cuál y la cantidad y preparo una solicitud de presupuesto."
-                    )
-                    await _safe_chat_reply(db, account_id, conversation_id, reply)
-                    result = {
-                        "status": "success",
-                        "action": "catalog_overview",
-                        "products": verified_products,
-                        "reply": reply,
-                    }
-                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
-                else:
+                if not verified_products:
                     reply = (
                         "De momento no tenemos productos verificables en el catálogo. "
                         "Te paso con el equipo comercial para que te ayude."
@@ -1421,9 +1477,23 @@ async def receive_chatwoot_webhook(
                         int(conversation_id),
                         "Consulta de catálogo sin productos sincronizados.",
                     )
-                    result = {"status": "success", "action": "catalog_empty_handoff", "reply": reply}
+                    result = {
+                        "status": "success",
+                        "action": "catalog_empty_handoff",
+                        "reply": reply,
+                    }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
-            elif verified_products:
+                    return result
+                if domain_hint:
+                    action_label = "catalog_overview_fallback"
+                else:
+                    action_label = "catalog_overview"
+            else:
+                # Sin coincidencias y sin intención de catálogo: caemos a
+                # RAG/handoff en el bloque siguiente.
+                verified_products = []
+
+            if verified_products:
                 lines = []
                 for product in verified_products:
                     availability = (
@@ -1435,20 +1505,43 @@ async def receive_chatwoot_webhook(
                         f"• {product['name']} ({product['sku']}): "
                         f"{product['unit_price']:.2f} {settings.CURRENCY}, {availability}."
                     )
-                reply = (
-                    "He encontrado estas opciones verificadas en el catálogo:\n"
-                    + "\n".join(lines)
-                    + "\nIndícame la cantidad y tus datos de contacto para preparar una solicitud de presupuesto."
-                )
+                if action_label == "catalog_scoped_overview":
+                    header = f"Estas son las opciones de {_humanize_category(domain_hint)} que tenemos en el catálogo:\n"
+                    footer = (
+                        "Si te interesa alguna, dime cuál y la cantidad y preparo una solicitud de presupuesto."
+                    )
+                elif action_label == "catalog_overview_fallback":
+                    header = "Estas son las opciones verificadas disponibles en el catálogo:\n"
+                    footer = (
+                        f"De momento no tenemos {_humanize_category(domain_hint)} en oferta; "
+                        "te paso lo que sí tenemos verificado por si te encaja algo. "
+                        "Si te interesa alguno, dime cuál y la cantidad y preparo una solicitud de presupuesto."
+                    )
+                elif action_label == "catalog_overview":
+                    header = "Estas son las opciones verificadas disponibles en el catálogo:\n"
+                    footer = (
+                        "Si te interesa alguna, dime cuál y la cantidad y preparo una solicitud de presupuesto."
+                    )
+                else:  # verified_product_recommendations
+                    header = "He encontrado estas opciones verificadas en el catálogo:\n"
+                    footer = (
+                        "Indícame la cantidad y tus datos de contacto para preparar una solicitud de presupuesto."
+                    )
+                reply = header + "\n".join(lines) + "\n" + footer
                 await _safe_chat_reply(db, account_id, conversation_id, reply)
                 result = {
                     "status": "success",
-                    "action": "verified_product_recommendations",
+                    "action": action_label,
+                    "domain": domain_hint,
                     "products": verified_products,
                     "reply": reply,
                 }
                 _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
             else:
+                # Sin productos y sin product_inquiry: cae al RAG/handoff
+                # en el bloque siguiente.
+                pass
+            if not verified_products and not product_inquiry:
                 try:
                     evidence = await RAGService(db).search(content, top_k=3, role="public")
                 except RAGError:
