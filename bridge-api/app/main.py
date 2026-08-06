@@ -728,9 +728,9 @@ def _is_full_catalog_request(content: str) -> bool:
 
     Detecta frases inequívocas tipo "pásame todo el catálogo",
     "ver todos los productos", "lista completa de la tienda", etc.
-    En ese caso descartamos los matches específicos (que pueden
-    ser débiles por tokens como "todo"/"completo"/"tienda") y
-    devolvemos el listado completo de productos PrestaShop.
+    En ese caso NO listamos los productos en el chat (eso saturaría
+    la conversación); en su lugar redirigimos a la web y mostramos
+    las categorías principales para que el cliente refine su búsqueda.
     """
     if not content:
         return False
@@ -738,10 +738,182 @@ def _is_full_catalog_request(content: str) -> bool:
     tokens = set(normalized.split())
     # Combinaciones inequívocas: "todo/todos" + "catálogo/productos/artículos/tienda".
     full_quantifiers = {"todo", "todos", "toda", "todas"}
-    full_targets = {"catalogo", "catálogo", "productos", "articulos", "artículos", "tienda", "vuestra", "referencias", "referencia", "catalogo", "vuestro", "oferta", "existencias"}
+    full_targets = {"catalogo", "catálogo", "productos", "articulos", "artículos", "tienda", "vuestra", "referencias", "referencia", "vuestro", "oferta", "existencias"}
     has_quantifier = bool(tokens & full_quantifiers)
     has_target = bool(tokens & full_targets)
     return has_quantifier and has_target
+
+
+def _is_comparison_request(content: str) -> bool:
+    """Devuelve True si el cliente pide comparar 2+ productos.
+
+    Detecta patrones tipo "compara X y Y", "X vs Y",
+    "diferencia entre X e Y", "qué es mejor X o Y".
+    """
+    if not content:
+        return False
+    normalized = content.lower()
+    comparison_signals = [
+        "compara", "comparar", "comparación", "comparacion",
+        "diferencia", "diferencias",
+        "mejor ", "cuál es mejor", "cual es mejor",
+    ]
+    if any(signal in normalized for signal in comparison_signals):
+        return True
+    # " vs ", " o " entre posibles productos (p. ej. "silla A o silla B")
+    if " vs " in normalized or " versus " in normalized:
+        return True
+    return False
+
+
+async def _handle_product_comparison(db: Session, *, content: str, limit: int):
+    """Extrae 2+ nombres de producto del mensaje y devuelve una vista
+    comparativa lado a lado. Devuelve ``None`` si no se identifican al
+    menos dos productos comparables.
+    """
+    tools = DeterministicToolsService(db)
+    # Tokens principales (>=4 chars) del mensaje, filtrando stopwords.
+    lowered = content.lower()
+    # Detectar separadores tipo " vs ", " y ", " o ".
+    candidates_raw = re.split(r"\bvs\.?\b|\bversus\b|\by\b|\bo\b|\be\b| vs | o | y ", lowered)
+    candidates = [c.strip() for c in candidates_raw if len(c.strip()) >= 3]
+    # Filtramos palabras de pregunta: qué, cuál, mejor, diferencia, etc.
+    stop_comparison = {
+        "qué", "que", "cual", "cuál", "es", "mejor", "diferencia",
+        "diferencias", "comparación", "comparacion", "compara", "comparar",
+        "cuál", "tienes", "teneis", "tengo", "hay", "entre", "y", "o", "vs",
+        "versus", "el", "la", "los", "las", "de", "del", "al", "un", "una",
+        "por", "para", "con", "sin",
+    }
+    product_names = [c for c in candidates if c not in stop_comparison]
+    if not product_names:
+        # Si no pudimos extraer candidatos por separador, probamos con
+        # tokens largos del mensaje.
+        tokens = re.findall(r"\b\w{4,}\b", lowered)
+        product_names = [t for t in tokens if t not in stop_comparison][:3]
+
+    found: List[Dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for name in product_names:
+        results = tools.search_products(name, limit=2, source="prestashop")
+        for r in results:
+            if r["id"] in seen_ids:
+                continue
+            seen_ids.add(r["id"])
+            found.append(r)
+            if len(found) >= limit:
+                break
+        if len(found) >= limit:
+            break
+
+    if len(found) < 2:
+        return None
+
+    lines = ["Aquí tienes la comparativa lado a lado:\n"]
+    for product in found[:limit]:
+        availability = (
+            f"{product['available_stock']} disponibles"
+            if product["available_stock"] > 0
+            else "sin existencias"
+        )
+        lines.append(
+            f"• {product['name']} ({product['sku']}) — "
+            f"{product['unit_price']:.2f} {settings.CURRENCY}, {availability}."
+        )
+    lines.append(
+        "\nSi quieres un presupuesto o ver más opciones de alguna, dime cuál."
+    )
+    return ("\n".join(lines), found)
+
+
+async def _build_catalog_categories_summary(db: Session, *, tools, limit: int) -> Dict[str, Any]:
+    """Resumen del catálogo PrestaShop para el modo 'todo el catálogo'.
+
+    Devuelve el total de productos y el desglose por categoría con un
+    ejemplo representativo por cada una. NO lista los productos uno a
+    uno: el chat debe redirigir a la web.
+    """
+    products = tools.search_products("", limit=10_000, source="prestashop")
+    by_category: Dict[str, List[Dict[str, Any]]] = {}
+    for product in products:
+        category = (product.get("category") or "Otros").strip() or "Otros"
+        by_category.setdefault(category, []).append(product)
+    lines = []
+    sorted_categories = sorted(
+        by_category.items(), key=lambda kv: (-len(kv[1]), kv[0])
+    )
+    for category, items in sorted_categories[:8]:
+        example = items[0]
+        lines.append(
+            f"• {category}: {len(items)} producto(s) (ej. {example['name']})"
+        )
+    return {
+        "total": len(products),
+        "n_categories": len(by_category),
+        "breakdown": "\n".join(lines),
+    }
+
+
+def _build_categories_brief(db: Session, *, tools, limit: int) -> Dict[str, Any]:
+    """Resumen ligero de categorías para el modo 'browse prompt'."""
+    products = tools.search_products("", limit=10_000, source="prestashop")
+    by_category: Dict[str, int] = {}
+    for product in products:
+        category = (product.get("category") or "Otros").strip() or "Otros"
+        by_category[category] = by_category.get(category, 0) + 1
+    return {
+        "total": len(products),
+        "n_categories": len(by_category),
+        "by_category": by_category,
+    }
+
+
+async def _safe_chat_reply_with_categories(
+    db: Session,
+    *,
+    account_id: str,
+    conversation_id: str,
+    idempotency_key: str,
+    claim_owner: str,
+    header: str,
+    lines: List[str],
+    footer: str,
+    action_label: str,
+    domain_hint: Optional[str],
+    verified_products: List[Dict[str, Any]],
+):
+    """Reply que mezcla productos destacados + desglose por categorías
+    para sugerir al cliente cómo refinar su búsqueda.
+    """
+    by_category: Dict[str, int] = {}
+    for product in verified_products:
+        category = (product.get("category") or "Otros").strip() or "Otros"
+        by_category[category] = by_category.get(category, 0) + 1
+    top_categories = sorted(
+        by_category.items(), key=lambda kv: (-kv[1], kv[0])
+    )[:6]
+    breakdown_lines = [
+        f"   - {cat}: {n} producto(s)" for cat, n in top_categories
+    ]
+    breakdown = "\n".join(breakdown_lines)
+    reply = (
+        header
+        + "\n".join(lines)
+        + "\n"
+        + footer
+        + "\n\nPuedes buscar por categoría:\n"
+        + breakdown
+    )
+    await _safe_chat_reply(db, account_id, conversation_id, reply)
+    result = {
+        "status": "success",
+        "action": action_label,
+        "domain": domain_hint,
+        "products": verified_products,
+        "reply": reply,
+    }
+    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+    return result
 
 
 def _authoritative_prestashop_tax_rate(remote: Dict[str, Any]) -> Decimal:
@@ -1445,46 +1617,77 @@ async def receive_chatwoot_webhook(
                     }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
         else:
-            # En el piloto comercial no se permite responder con datos de
-            # producto generados libremente por un LLM. Primero se buscan
-            # coincidencias verificadas en el catálogo local sincronizado con
-            # PrestaShop y, después, evidencia documental pública.
-            # CATALOG_OVERVIEW_LIMIT controla el límite deseado por el
-            # operador (default 500). El cap interno (10_000) garantiza
-            # que el chat pueda devolver catálogos completos de
-            # PrestaShop incluso con varios miles de productos. Para
-            # ver TODOS los productos sin tope, basta con poner
-            # CATALOG_OVERVIEW_LIMIT=0 (o muy alto) en .env.
-            raw_limit = int(getattr(settings, "CATALOG_OVERVIEW_LIMIT", 500) or 500)
+            # El chat es un asistente comercial: recomienda, busca rápido
+            # y compara, NUNCA lista el catálogo entero. Cap efectivo
+            # configurable vía CATALOG_OVERVIEW_LIMIT (default 5). El cap
+            # interno (10_000) es solo salvaguarda; el chat comercial no
+            # debe acercarse a él.
+            raw_limit = int(getattr(settings, "CATALOG_OVERVIEW_LIMIT", 5) or 5)
             overview_limit = max(1, min(raw_limit, 10_000))
 
             product_inquiry = _looks_like_product_inquiry(content)
             domain_hint = _extract_domain_hint(content) if product_inquiry else None
             full_catalog_request = _is_full_catalog_request(content)
+            comparison_request = _is_comparison_request(content)
 
-            # Búsqueda específica por el contenido completo (sin domain
-            # hint). Si el cliente dice "necesito una silla" el contenido
-            # matchea y la IA responde con esos productos verificados.
-            specific_products: List[Dict[str, Any]] = []
-            if not domain_hint:
-                # El chat solo expone al cliente productos PrestaShop
-                # (catálogo real de la tienda). Las recomendaciones
-                # puntuales también filtran por source='prestashop' para
-                # no sugerir productos de staging al usuario final.
-                specific_products = tools.search_products(
-                    content, limit=3, source="prestashop"
+            # ----------------------------------------------------------------
+            # MODO 1: Comparación ("compara X y Y", "X vs Y",
+            #         "diferencia entre X e Y").
+            # ----------------------------------------------------------------
+            if comparison_request:
+                comparison_result = await _handle_product_comparison(
+                    db,
+                    content=content,
+                    limit=overview_limit,
                 )
-            # Si el cliente pidió TODO el catálogo, descartamos los
-            # matches específicos (que pueden ser débiles y
-            # incompletos) y devolvemos el listado completo.
-            if full_catalog_request:
-                specific_products = []
+                if comparison_result is not None:
+                    reply, compared = comparison_result
+                    await _safe_chat_reply(db, account_id, conversation_id, reply)
+                    result = {
+                        "status": "success",
+                        "action": "product_comparison",
+                        "products": compared,
+                        "reply": reply,
+                    }
+                    _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                    # Early return: la comparación cubre la intención de
+                    # catálogo del cliente sin pasar por el fallback.
+                    return result
 
-            # Búsqueda scoped por categoría cuando hay domain hint. Tiene
-            # precedencia sobre los matches específicos para evitar falsos
-            # positivos (p. ej. "pásame los portátiles en oferta" tiene
-            # tokens débiles "en"/"de"/"que" que casan con productos no
-            # relacionados como "anilla").
+            # ----------------------------------------------------------------
+            # MODO 2: "todo el catálogo" / "todos los productos".
+            #   En vez de volcar los productos, redirigimos a la web
+            #   oficial y mostramos las categorías principales para que
+            #   el cliente refine su búsqueda. Esto es exactamente lo
+            #   que esperaría un comercial humano.
+            # ----------------------------------------------------------------
+            if full_catalog_request:
+                catalog_summary = await _build_catalog_categories_summary(
+                    db, tools=tools, limit=overview_limit
+                )
+                reply = (
+                    "Tenemos un catálogo extenso sincronizado desde PrestaShop "
+                    f"con {catalog_summary['total']} productos. Para que "
+                    "puedas navegarlo cómodamente te paso el enlace al "
+                    "catálogo completo y un resumen por categorías:\n\n"
+                    f"{catalog_summary['breakdown']}\n\n"
+                    "¿Cuál te interesa? Dime la categoría o el tipo de "
+                    "producto que buscas y te ayudo a encontrarlo."
+                )
+                await _safe_chat_reply(db, account_id, conversation_id, reply)
+                result = {
+                    "status": "success",
+                    "action": "catalog_redirect",
+                    "domain": domain_hint,
+                    "reply": reply,
+                }
+                _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                return result
+
+            # ----------------------------------------------------------------
+            # Búsqueda específica: primero intentamos scoped por categoría
+            # (cuando hay domain hint) y luego por contenido completo.
+            # ----------------------------------------------------------------
             scoped_products: List[Dict[str, Any]] = []
             if domain_hint:
                 scoped_products = tools.search_products(
@@ -1493,25 +1696,27 @@ async def receive_chatwoot_webhook(
                     source="prestashop",
                 )
 
+            specific_products: List[Dict[str, Any]] = []
+            if not scoped_products:
+                # El chat solo expone al cliente productos PrestaShop
+                # (catálogo real de la tienda). Las recomendaciones
+                # puntuales también filtran por source='prestashop'.
+                specific_products = tools.search_products(
+                    content, limit=overview_limit, source="prestashop"
+                )
+
             if scoped_products:
-                # Coincidencias por categoría: lista verificada y scoped
-                # sólo con productos PrestaShop (catálogo real de la tienda).
                 verified_products = scoped_products
-                action_label = "catalog_scoped_overview"
+                action_label = "catalog_scoped_recommendation"
             elif specific_products:
-                # Coincidencias por contenido sin dominio: lista de
-                # recomendaciones puntuales (puede incluir productos
-                # importados o locales relevantes).
                 verified_products = specific_products
                 action_label = "verified_product_recommendations"
             elif product_inquiry:
-                # Sin coincidencias pero la pregunta es de catálogo:
-                # mostramos el catálogo completo de PrestaShop (o un
-                # fallback con nota si había domain hint).
+                # Sin matches específicos: mostramos las categorías
+                # principales y un top-3 muy breve para que el cliente
+                # sepa qué tenemos sin saturar la conversación.
                 verified_products = tools.search_products(
-                    "",
-                    limit=overview_limit,
-                    source="prestashop",
+                    "", limit=overview_limit, source="prestashop"
                 )
                 if not verified_products:
                     reply = (
@@ -1533,13 +1738,10 @@ async def receive_chatwoot_webhook(
                     }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
                     return result
-                if domain_hint:
-                    action_label = "catalog_overview_fallback"
-                else:
-                    action_label = "catalog_overview"
+                action_label = "catalog_browse_prompt"
             else:
                 # Sin coincidencias y sin intención de catálogo: caemos a
-                # RAG/handoff en el bloque siguiente.
+                # RAG/handoff.
                 verified_products = []
 
             if verified_products:
@@ -1554,27 +1756,45 @@ async def receive_chatwoot_webhook(
                         f"• {product['name']} ({product['sku']}): "
                         f"{product['unit_price']:.2f} {settings.CURRENCY}, {availability}."
                     )
-                if action_label == "catalog_scoped_overview":
-                    header = f"Estas son las opciones de {_humanize_category(domain_hint)} que tenemos en el catálogo:\n"
+                if action_label == "catalog_scoped_recommendation":
+                    header = f"He encontrado estas opciones de {_humanize_category(domain_hint)}:\n"
                     footer = (
-                        "Si te interesa alguna, dime cuál y la cantidad y preparo una solicitud de presupuesto."
+                        "¿Cuál te encaja? Si quieres que las compare o pidas presupuesto, dime el nombre."
                     )
-                elif action_label == "catalog_overview_fallback":
-                    header = "Estas son las opciones verificadas disponibles en el catálogo:\n"
-                    footer = (
-                        f"De momento no tenemos {_humanize_category(domain_hint)} en oferta; "
-                        "te paso lo que sí tenemos verificado por si te encaja algo. "
-                        "Si te interesa alguno, dime cuál y la cantidad y preparo una solicitud de presupuesto."
-                    )
-                elif action_label == "catalog_overview":
-                    header = "Estas son las opciones verificadas disponibles en el catálogo:\n"
-                    footer = (
-                        "Si te interesa alguna, dime cuál y la cantidad y preparo una solicitud de presupuesto."
-                    )
-                else:  # verified_product_recommendations
+                elif action_label == "verified_product_recommendations":
                     header = "He encontrado estas opciones verificadas en el catálogo:\n"
                     footer = (
-                        "Indícame la cantidad y tus datos de contacto para preparar una solicitud de presupuesto."
+                        "¿Te interesa alguna? Dime cuál y la cantidad y preparo una solicitud de presupuesto."
+                    )
+                elif action_label == "catalog_browse_prompt":
+                    # Sugerencia de categorías + top-N breve.
+                    breakdown = _build_categories_brief(db, tools=tools, limit=overview_limit)
+                    header = (
+                        f"Tenemos {breakdown['total']} productos en "
+                        f"{breakdown['n_categories']} categorías. "
+                        "Estas son nuestras más populares:\n"
+                    )
+                    footer = (
+                        "\nDime qué necesitas (p. ej. \"blocs de dibujo\", "
+                        "\"material de oficina\") y te hago una selección personalizada."
+                    )
+                    return await _safe_chat_reply_with_categories(
+                        db,
+                        account_id=account_id,
+                        conversation_id=conversation_id,
+                        idempotency_key=idempotency_key,
+                        claim_owner=claim_owner,
+                        header=header,
+                        lines=lines,
+                        footer=footer,
+                        action_label=action_label,
+                        domain_hint=domain_hint,
+                        verified_products=verified_products,
+                    )
+                else:
+                    header = "Estas son las opciones verificadas disponibles en el catálogo:\n"
+                    footer = (
+                        "¿Te interesa alguna? Dime cuál y la cantidad y preparo una solicitud de presupuesto."
                     )
                 reply = header + "\n".join(lines) + "\n" + footer
                 await _safe_chat_reply(db, account_id, conversation_id, reply)
@@ -1587,8 +1807,7 @@ async def receive_chatwoot_webhook(
                 }
                 _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
             else:
-                # Sin productos y sin product_inquiry: cae al RAG/handoff
-                # en el bloque siguiente.
+                # Sin productos y sin product_inquiry: cae al RAG/handoff.
                 pass
             if not verified_products and not product_inquiry:
                 try:
