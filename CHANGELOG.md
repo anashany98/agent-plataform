@@ -2,6 +2,12 @@
 
 Todos los cambios relevantes de la remediación se documentan aquí. El proyecto adopta SemVer cuando exista una primera candidata reproducible.
 
+## [Informe de estado 2026-08-09]
+
+- Informe técnico completo del proyecto en `release/project-status-report/PROJECT_STATUS_REPORT.pdf` (21 páginas, A4, ReportLab).
+- Generador: `scripts/generate_project_status_report.py` (re-ejecutable: `python scripts/generate_project_status_report.py`).
+- Resume: decisión NOT PRODUCTION READY — CRITICAL RISK, defectos abiertos, lo verificado, trabajo pendiente, plan de cierre, bloqueos externos, los 30 criterios PR-, riesgos críticos y roadmap 30/60/90. Cualquier informe previo queda SUPERSEDED para decisiones actuales.
+
 ## [Unreleased]
 
 ### Added
