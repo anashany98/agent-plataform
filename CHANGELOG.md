@@ -46,14 +46,25 @@ productos con "ACUARELA" en `name`. La integración quedaba con 0
 resultados en producción sin error visible.
 
 - `bridge-api/app/services/prestashop_adapter.py`: `search_products()`
-  cae a listado paginado (`_get_paginated_rows`) + filtrado en memoria
-  sobre `name`, `reference` y `description_short`. Mantiene el resto del
-  contrato (límite, `include_details`, sellable, stop-words).
+  cae a listado paginado + filtrado en memoria sobre `name`, `reference` y
+  `description_short`, **con parada temprana** al alcanzar `safe_limit`
+  matches para no iterar catálogos de 10000+ productos cuando solo queremos 10.
+  Mantiene el resto del contrato (límite, `include_details`, sellable,
+  stop-words).
 - `tests/regression/test_prestashop_webservice_search.py`: 3 evals nuevos
   (1 offline + 2 opt-in con tienda real, skipped sin credenciales).
 - `tests/regression/test_p1_prestashop_safety.py`: actualiza
   `test_adapter_search_does_not_expose_non_sellable_products` para
   mockear `_get_paginated_rows` además de `_get`.
+
+Verificación live (`tests/regression/test_prestashop_webservice_search.py`
+skipped sin credenciales, ejecutado con `.env` real):
+
+```
+search_products('ACUARELA', limit=5) → 5 productos reales
+search_products('sacapuntas', limit=5) → 5 SACAPUNTAS reales
+search_products('JOVI') → productos JOVI con sku y stock reales
+```
 
 Corpus afectado (verificado): 77 / 77 verdes en
 `test_prestashop_webservice_search` + `test_p1_prestashop_safety` +

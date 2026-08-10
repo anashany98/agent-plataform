@@ -224,37 +224,53 @@ class PrestaShopAdapter:
         # ``https://btopdigital.es`` durante la auditoría 2026-08-10). El
         # servicio cae al listado paginado + filtrado en memoria sobre el
         # nombre, la referencia y la descripción corta, manteniendo el resto
-        # del contrato (límite, ``include_details``).
+        # del contrato (límite, ``include_details``). Iteramos página a
+        # página y paramos en cuanto alcanzamos ``safe_limit`` matches para
+        # no recorrer catálogos de 10000+ productos cuando sólo queremos 10.
+        collected: int = 0
         for term in search_terms[:8]:
-            rows = await self._get_paginated_rows(
-                "products",
-                {
-                    "display": (
-                        "[id,reference,name,description_short,price,id_category_default,"
-                        "id_tax_rules_group,id_default_combination,id_shop_default,active,"
-                        "manufacturer_name,available_for_order,show_price]"
-                    ),
-                    "filter[active]": "[1]",
-                    "sort": "[id_ASC]",
-                },
-                page_size=self._PAGE_SIZE,
-            )
             term_lower = term.lower()
-            for item in rows:
-                product_id = str(item.get("id") or "").strip()
-                if not product_id or product_id in found:
-                    continue
-                if not self._is_sellable_product(item):
-                    continue
-                name = self._localized(item.get("name")) or ""
-                reference = str(item.get("reference") or "")
-                description = self._clean_html_text(
-                    self._localized(item.get("description_short"))
+            page_number = 0
+            page_size = self._PAGE_SIZE
+            while collected < safe_limit and page_number < self._MAX_PAGES:
+                offset = page_number * page_size
+                payload = await self._get(
+                    "products",
+                    {
+                        "display": (
+                            "[id,reference,name,description_short,price,id_category_default,"
+                            "id_tax_rules_group,id_default_combination,id_shop_default,active,"
+                            "manufacturer_name,available_for_order,show_price]"
+                        ),
+                        "filter[active]": "[1]",
+                        "limit": f"{offset},{page_size}",
+                        "sort": "[id_ASC]",
+                    },
                 )
-                haystack = " ".join((name, reference, description)).lower()
-                if term_lower in haystack:
-                    found[product_id] = item
-            if len(found) >= safe_limit:
+                rows = self._rows(payload, "products")
+                if not rows:
+                    break
+                for item in rows:
+                    product_id = str(item.get("id") or "").strip()
+                    if not product_id or product_id in found:
+                        continue
+                    if not self._is_sellable_product(item):
+                        continue
+                    name = self._localized(item.get("name")) or ""
+                    reference = str(item.get("reference") or "")
+                    description = self._clean_html_text(
+                        self._localized(item.get("description_short"))
+                    )
+                    haystack = " ".join((name, reference, description)).lower()
+                    if term_lower in haystack:
+                        found[product_id] = item
+                        collected += 1
+                        if collected >= safe_limit:
+                            break
+                if len(rows) < page_size:
+                    break
+                page_number += 1
+            if collected >= safe_limit:
                 break
 
         return [

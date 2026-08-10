@@ -114,6 +114,41 @@ def test_search_products_falls_back_to_in_memory_filter() -> None:
             },
         ]
 
+    _call_count = {"n": 0}
+
+    async def fake_get(resource: str, params: dict) -> dict:
+        assert resource == "products"
+        _call_count["n"] += 1
+        print(f"  fake_get call #{_call_count['n']} params={params}")
+        # Simula un catálogo real: primera página con resultados y segunda
+        # vacía (PrestaShop devuelve ``{}`` cuando no hay más filas).
+        if _call_count["n"] > 1:
+            return {"products": []}
+        return {
+            "products": [
+                {
+                    "id": "10",
+                    "reference": "800/12",
+                    "name": "ACUARELA JOVI 12 COLORES",
+                    "description_short": "Estuche de plástico",
+                    "price": "3.770000",
+                    "active": "1",
+                    "show_price": "1",
+                    "available_for_order": "1",
+                },
+                {
+                    "id": "99",
+                    "reference": "XYZ-1",
+                    "name": "OTRO PRODUCTO",
+                    "description_short": "Sin coincidencia",
+                    "price": "9.990000",
+                    "active": "1",
+                    "show_price": "1",
+                    "available_for_order": "1",
+                },
+            ]
+        }
+
     async def fake_get_stock(*args, **kwargs) -> int:  # noqa: ANN001
         return 10
 
@@ -129,13 +164,6 @@ def test_search_products_falls_back_to_in_memory_filter() -> None:
 
     async def fake_get_category_name(category_id: str) -> str:  # noqa: ANN001
         return "Oficina"
-
-    async def fake_get(resource: str, params: dict) -> dict:  # noqa: ANN001
-        # Cualquier llamada a ``_get`` no mockeada explícitamente devuelve
-        # una lista vacía simulando "no hay datos para esta consulta".
-        if resource == "stock_availables":
-            return {"stock_availables": [{"quantity": "10", "id_product": "10", "id_product_attribute": "0"}]}
-        return {}
 
     adapter = PrestaShopAdapter.__new__(PrestaShopAdapter)
     adapter.base_url = "https://example.test"
