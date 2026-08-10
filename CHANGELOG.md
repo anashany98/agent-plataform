@@ -2,6 +2,42 @@
 
 Todos los cambios relevantes de la remediación se documentan aquí. El proyecto adopta SemVer cuando exista una primera candidata reproducible.
 
+## [Remediación de auditoría 2026-08-10]
+
+Esta entrada cierra los defectos P0/P1 reabiertos por `docs/PROJECT_STATUS_AUDIT_2026-08-10.md`. Cada cierre incluye eval de regresión en `tests/regression/test_audit_remediation_2026_08_10.py` y en los suites existentes.
+
+### Security / P0
+
+- **Restore destructivo (`bridge-api/app/services/backup.py`)** — `restore_to_url` ya no invoca `Base.metadata.drop_all(engine)` sobre el destino. Ahora exige un marker explícito (`_bridge_restore_marker`) creado por `prepare_restore_target(database_url, schema_version=...)` en una base recién inicializada. Sin marker, o con tablas de aplicación presentes, se lanza `RestoreSafetyError` sin modificar nada. Tres evals (`test_restore_to_url_refuses_base_without_marker`, `test_restore_to_url_with_marker_succeeds` y un test de poblado intacto). La rama `restore_backup(engine, manifest)` (test hermético) y los tests `test_p0_migrations` que usaban `restore_backup` directamente siguen pasando.
+
+### Core / P1
+
+- **Idempotencia del webhook (`bridge-api/app/main.py`)** — el handler `/webhooks/chatwoot` ahora garantiza transición a `state="completed"` tras cada rama de éxito. Cada `return` temprano llama a `_complete_idempotency` y marca `terminal_done=True`; un `try/finally` finalizador (`_complete_idempotency_if_pending`) cierra defensivamente cualquier checkpoint dejado en `processing`. El replay del mismo `message_id` ahora devuelve 200 con la respuesta cacheada en lugar de 202 `processing`. Nuevo eval `test_webhook_replay_returns_cached_result_not_processing` verifica el flujo contra `IdempotencyRecord.state == "completed"`.
+- **Migración 0006 (`bridge-api/alembic/versions/0006_product_embeddings.py`)** — la revisión se hace explícitamente dialect-aware: en **PostgreSQL** crea la tabla `product_embeddings` con `pgvector.sqlalchemy.Vector(768)`, FK compuesta tenant-safe `installation_id, product_id → products(installation_id, id) ON DELETE CASCADE`, índice ivfflat opcional y `CREATE EXTENSION IF NOT EXISTS vector`; en **SQLite** (corpus de tests hermético) sale temprano sin crear la tabla ni ejecutar `CREATE EXTENSION`. Downgrade preservador (no-op). Se actualizan los tests `test_p0_migrations` para esperar `0006` como nueva cabeza y se añade `test_0006_is_dialect_skip_on_sqlite`.
+- **Catálogo local cuando PrestaShop no está (`bridge-api/app/main.py`)** — nuevo helper `_default_catalog_source()`: devuelve `"prestashop"` si el adaptador está configurado, o `None` (todos los productos visibles del catálogo local) si no. Todas las llamadas del chat comercial (`catalog_overview`, `catalog_full_list`, `verified_product_recommendations`, `catalog_browse_prompt`, comparador y resúmenes de categorías) usan el helper en lugar de hardcodear `source="prestashop"`. Dos evals (`test_default_catalog_source_returns_none_when_prestashop_not_configured` y `test_default_catalog_source_returns_prestashop_when_configured`).
+- **NameError `_LOG` (`bridge-api/app/main.py:1983`)** — la rama fallback de `commerce_chat` ya no usa `_LOG` (que no estaba definido). Ahora emite `log_event("WARNING", "commerce_chat_failed_fallback_extractive", ...)` desde `app.services.observability` con redacción determinista.
+
+### Integraciones / P1
+
+- **SSRF Chatwoot (`docker-compose.yml`)** — `SAFE_FETCH_ALLOW_PRIVATE_NETWORK` deja de estar fijado en `"true"` y pasa a `${CHATWOOT_SAFE_FETCH_ALLOW_PRIVATE_NETWORK:-false}`. La postura segura por defecto exigida por la auditoría queda alineada con el override explícito para desarrollo local.
+- **Webhooks salientes (`bridge-api/app/services/automations.py::send_webhook`)** — la firma HMAC ya no cae a `idempotency_key` cuando falta `WEBHOOK_OUTBOUND_SECRET`; exige secreto de ≥32 caracteres y `key_id` configurable. Se añaden cabeceras `X-Bridge-Webhook-Key-Id` y `X-Bridge-Webhook-Timestamp` para rotación y anti-replay. Se añade `_assert_outbound_url_allowed()` con allowlist (`WEBHOOK_OUTBOUND_ALLOWED_HOSTS`) y resolución IP previa al envío que bloquea loopback, RFC1918, link-local, multicast, reservados y no-especificados. Errores devueltos con `accepted=False` (`status="rejected"` o `"failed"`), nunca éxito falso.
+- **Email provider (`bridge-api/app/services/automations.py::send_email` + `LocalEmailProvider`)** — `LocalEmailProvider.send` ya no silencia `OSError` ni devuelve `accepted=True` cuando el disco falla; ahora `accepted=False` con `error="local_provider_io_error:..."`. `send_email` falla cerrado cuando el proveedor configurado no está registrado (sin fallback silencioso a local). Auditoría diferenciada (`automation.email_sent` vs `automation.email_failed`).
+
+### Pendiente (no cerrado por esta entrada)
+
+- Portal RBAC (matriz de rutas/acciones, navegación por rol, aprobaciones con detalle y confirmación accesible).
+- Portal catálogo paginado con búsqueda/orden/filtros + exposición de `updated_at` y origen/frescura.
+- Rate limiting/proxy trust endurecido (CIDR allowlist, IP derivada por cadena validada, Redis como backend).
+- Production Compose con TLS, listener 443, certificados, redirección 80→443 y eliminación de 9000 público.
+- Supply chain (actualizar `nanoid@3.3.16`, fijar imágenes por digest, CI autoritativa con SBOM y escaneo de imágenes).
+- Licencias y revisión legal de vendor/EE.
+
+## [Auditoría de estado 2026-08-10]
+
+- Nuevo informe actual: `docs/PROJECT_STATUS_AUDIT_2026-08-10.md` y artefacto HTML autocontenido.
+- Reevaluación mantiene `NOT PRODUCTION READY — CRITICAL RISK` y documenta regresiones actuales: restore con `drop_all()` sin guard, migración `0006` incompleta, idempotencia del webhook, catálogo local excluido, quality gates rojos, SSRF/TLS/rate limit, RBAC del portal y supply chain.
+- Se actualizan `STATUS.md`, `TASKS.md`, `BLOCKERS.md`, `docs/PRODUCTION_READINESS.md` y `docs/TEST_EVIDENCE.md` sin modificar código de producción ni el cambio ajeno `0006`.
+
 ## [Informe de estado 2026-08-09]
 
 - Informe técnico completo del proyecto en `release/project-status-report/PROJECT_STATUS_REPORT.pdf` (21 páginas, A4, ReportLab).

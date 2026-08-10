@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from app.database import Base
@@ -81,10 +82,16 @@ def _counts(engine) -> dict:
         }
 
 
-def test_backup_restore_roundtrip_sqlite() -> None:
-    source = create_engine(
-        "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
+def test_backup_restore_roundtrip_sqlite(tmp_path) -> None:
+    """Roundtrip hermético con ``prepare_restore_target`` + ``restore_to_url``.
+
+    Se usan bases SQLite en archivo porque ``restore_to_url`` exige un
+    marker persistente entre llamadas y ``:memory:`` recrea la base por
+    conexión.
+    """
+    source_path = tmp_path / "src.db"
+    target_path = tmp_path / "tgt.db"
+    source = create_engine(f"sqlite+pysqlite:///{source_path.as_posix()}")
     Base.metadata.create_all(source)
     _seed(source)
 
@@ -97,12 +104,12 @@ def test_backup_restore_roundtrip_sqlite() -> None:
     assert manifest["tables"]["products"]["count"] == 1
     assert manifest["tables"]["quotes"]["count"] == 1
 
-    # Restaurar a un motor vacío y verificar.
-    target = create_engine(
-        "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
-    )
+    # Restaurar a una base NUEVA con marker explícito y verificar.
+    target_url = f"sqlite+pysqlite:///{target_path.as_posix()}"
+    backup.prepare_restore_target(target_url)
+    target = create_engine(target_url)
     with installation_scope(INSTALLATION):
-        backup.restore_backup(target, manifest)
+        backup.restore_to_url(manifest, target_url)
         assert _counts(target) == {"customers": 1, "products": 1, "quotes": 1}
 
         tfactory = sessionmaker(bind=target)
@@ -198,10 +205,99 @@ def test_backup_restore_roundtrip_postgres() -> None:
     with installation_scope(INSTALLATION):
         with factory() as db:
             manifest = backup.create_backup(db, installation_id=INSTALLATION)
-        backup.restore_backup(target, manifest)
+        backup.prepare_restore_target(tgt_url)
+        backup.restore_to_url(manifest, tgt_url)
         tfactory = sessionmaker(bind=target)
         with tfactory() as db:
             verification = backup.verify_backup(db, manifest, installation_id=INSTALLATION)
     assert verification["ok"] is True, f"discrepancias: {verification['mismatches']}"
     source.dispose()
     target.dispose()
+
+
+def test_restore_to_url_refuses_base_without_marker() -> None:
+    """restore_to_url aborta si la base NO fue preparada con marker."""
+
+    target = create_engine(
+        "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    target_url = target.url.render_as_string(hide_password=False)
+
+    # Sin prepare_restore_target: la base está vacía pero NO tiene marker.
+    factory = sessionmaker(bind=source_for_marker_test())
+    with installation_scope(INSTALLATION):
+        with factory() as db:
+            manifest = backup.create_backup(db, installation_id=INSTALLATION)
+
+    with pytest.raises(backup.RestoreSafetyError):
+        backup.restore_to_url(manifest, target_url)
+    target.dispose()
+
+
+def test_restore_to_url_refuses_base_with_app_tables() -> None:
+    """restore_to_url aborta si la base destino ya tiene tablas de aplicación.
+
+    Esto evita destruir datos reales si alguien apunta por error a una URL
+    ocupada.
+    """
+
+    occupied = create_engine(
+        "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(occupied)  # ya tiene tablas de aplicación
+
+    factory = sessionmaker(bind=source_for_marker_test())
+    with installation_scope(INSTALLATION):
+        with factory() as db:
+            manifest = backup.create_backup(db, installation_id=INSTALLATION)
+
+    with pytest.raises(backup.RestoreSafetyError):
+        backup.restore_to_url(
+            manifest, occupied.url.render_as_string(hide_password=False)
+        )
+    occupied.dispose()
+
+
+def test_restore_to_url_preserves_populated_target() -> None:
+    """Una base con datos del cliente NO debe ser tocada aunque su URL sea
+    apuntada por error. El test prepara un cliente en una base ocupada y
+    verifica que el contenido sigue intacto tras un restore mal apuntado."""
+
+    occupied = create_engine(
+        "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(occupied)
+    factory = sessionmaker(bind=occupied)
+    with installation_scope(INSTALLATION):
+        with factory() as db:
+            db.add(Customer(id="cust-survive", name="Cliente Real", email="real@example.invalid"))
+            db.commit()
+            before = db.query(Customer).count()
+        assert before == 1
+
+    src_factory = sessionmaker(bind=source_for_marker_test())
+    with installation_scope(INSTALLATION):
+        with src_factory() as db:
+            manifest = backup.create_backup(db, installation_id=INSTALLATION)
+
+    with pytest.raises(backup.RestoreSafetyError):
+        backup.restore_to_url(
+            manifest, occupied.url.render_as_string(hide_password=False)
+        )
+
+    with installation_scope(INSTALLATION):
+        with factory() as db:
+            after = db.query(Customer).count()
+            surviving = db.query(Customer).filter(Customer.id == "cust-survive").first()
+    assert after == 1, "El restore mal apuntado no debe haber tocado la base"
+    assert surviving is not None and surviving.name == "Cliente Real"
+    occupied.dispose()
+
+
+def source_for_marker_test() -> Any:  # helper local
+    engine = create_engine(
+        "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    _seed(engine)
+    return engine

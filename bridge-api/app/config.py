@@ -140,6 +140,8 @@ class Settings(BaseSettings):
     AUTOMATION_QUOTE_EXPIRY_HORIZON_DAYS: int = int(os.getenv("AUTOMATION_QUOTE_EXPIRY_HORIZON_DAYS", "7"))
     AUTOMATION_DUNNING_OVERDUE_DAYS: int = int(os.getenv("AUTOMATION_DUNNING_OVERDUE_DAYS", "15"))
     WEBHOOK_OUTBOUND_SECRET: str = os.getenv("WEBHOOK_OUTBOUND_SECRET", "")
+    WEBHOOK_OUTBOUND_KEY_ID: str = os.getenv("WEBHOOK_OUTBOUND_KEY_ID", "primary")
+    WEBHOOK_OUTBOUND_ALLOWED_HOSTS: str = os.getenv("WEBHOOK_OUTBOUND_ALLOWED_HOSTS", "")
 
     COUNTRY: str = os.getenv("COUNTRY", "ES")
     CURRENCY: str = os.getenv("CURRENCY", "EUR")

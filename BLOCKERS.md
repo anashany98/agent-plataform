@@ -10,6 +10,8 @@
 | B-006 | IA externa | Sin proveedor/modelo autorizado y sin egress | Tool calling, coste y fallback remoto no verificables | Endpoint local autorizado o claves sandbox | Provider local real, schemas y evals | BLOCKED |
 | B-007 | DR | No existe restore completo reproducido | RPO/RTO y recuperabilidad desconocidos | Host/instalación vacía con margen seguro | Mejorar scripts/manifiestos y tests estáticos | BLOCKED |
 | B-008 | Legal | Código propio sin licencia raíz y rutas EE presentes en vendor | Redistribución comercial incierta | Revisión de titularidad, licencia y componentes EE | SBOM, notices y matriz técnica | BLOCKED |
+| B-009 | Migraciones | Revisión `0006_product_embeddings.py` ajena y sin seguimiento; Alembic la considera head y rompe la suite | Instalación limpia/upgrade no promovibles | Coordinar propietario; completar tipo Vector/modelo/FK/servicio/tests o retirarla del head sin perder el trabajo | Revisión dialect-aware (PostgreSQL con pgvector; SQLite no-op), FK tenant-safe, suite corregida | RESOLVED — `0006` dialect-aware y suite verde en SQLite; verificación pgvector pendiente de B-006/sandbox |
+| B-010 | Runtime 2026-08-10 | Docker daemon detenido y solo 2,83 GiB de RAM libre | No se pueden revalidar PostgreSQL, Redis, Ollama, full/production, E2E ni soak | Ventana de host dimensionado y Docker operativo | Tests locales, análisis estático, Compose config e informe | BLOCKED |
 
 Los bloqueos externos no autorizan mocks de producción ni respuestas sintéticas. Cada adapter debe ofrecer error explícito y permitir continuar con su proveedor local. El cierre P0 en `de236e9` no elimina ninguno de estos bloqueos de candidata/runtime.
 

@@ -366,9 +366,13 @@ services:
       # Registro de cuentas: desactivado por defecto (seguro). Actívalo solo en
       # desarrollo local para crear el primer admin (CHATWOOT_ENABLE_SIGNUP=true en .env).
       ENABLE_ACCOUNT_SIGNUP: ${CHATWOOT_ENABLE_SIGNUP:-false}
-      # SSRF: permitir que el webhook apunte a hosts internos (bridge-api) en
-      # desarrollo local. En producción el webhook debe ir a un dominio público.
-      SAFE_FETCH_ALLOW_PRIVATE_NETWORK: "true"
+      # SSRF: por defecto NO permitimos que el webhook de Chatwoot apunte a
+      # redes privadas (RFC1918, loopback, link-local). En desarrollo local
+      # puedes activar el flag vía override (.env o compose -f override).
+      # El vendor desactiva su filtro de red privada cuando este flag está en
+      # true, por lo que mantenerlo en "false" por defecto es la postura
+      # segura exigida por la auditoría 2026-08-10.
+      SAFE_FETCH_ALLOW_PRIVATE_NETWORK: ${CHATWOOT_SAFE_FETCH_ALLOW_PRIVATE_NETWORK:-false}
       SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE}
       POSTGRES_HOST: chatwoot-db
       POSTGRES_PORT: 5432

@@ -207,15 +207,74 @@ def test_send_webhook_returns_signed_idempotent_result(monkeypatch) -> None:
         return FakeResponse()
 
     monkeypatch.setattr(automations, "guarded_request_with_retry", fake_guarded)
+    # Política endurecida (auditoría 2026-08-10): se exige un secreto de
+    # configuración ≥32 caracteres; no se usa la idempotency_key como HMAC.
+    monkeypatch.setattr(
+        automations.settings,
+        "WEBHOOK_OUTBOUND_SECRET",
+        "test-webhook-outbound-secret-32-chars",
+    )
+    # El validador SSRF resuelve DNS; allowlistamos el host del test para
+    # no depender de la red real ni de hosts.example.com. ``monkeypatch.setattr``
+    # permite crear atributos dinámicos en instancias de ``pydantic.BaseSettings``.
+    monkeypatch.setattr(
+        automations.settings,
+        "WEBHOOK_OUTBOUND_ALLOWED_HOSTS",
+        "destino.example,public.test",
+        raising=False,
+    )
     result = asyncio.run(
         automations.send_webhook(
-            url="http://destino.invalid/hook", payload={"a": 1}, idempotency_key="idem-1"
+            url="https://public.test/hook", payload={"a": 1}, idempotency_key="idem-1"
         )
     )
-    assert result["status"] == "sent"
+    assert result["status"] == "sent", result
     assert result["idempotency_key"] == "idem-1"
     assert result["signature"].startswith("sha256=")
     assert captured["breaker"] == "webhook"
+
+
+def test_send_webhook_rejects_when_secret_missing(monkeypatch) -> None:
+    """Sin ``WEBHOOK_OUTBOUND_SECRET`` el envío se rechaza con error explícito."""
+
+    import asyncio
+
+    monkeypatch.setattr(automations.settings, "WEBHOOK_OUTBOUND_SECRET", "")
+    monkeypatch.setattr(
+        automations.settings,
+        "WEBHOOK_OUTBOUND_ALLOWED_HOSTS",
+        "destino.example",
+        raising=False,
+    )
+    result = asyncio.run(
+        automations.send_webhook(
+            url="https://destino.example/hook", payload={"a": 1}, idempotency_key="idem-2"
+        )
+    )
+    assert result["status"] == "rejected"
+    assert result["accepted"] is False
+    assert "WEBHOOK_OUTBOUND_SECRET" in result["error"]
+
+
+def test_send_webhook_blocks_private_network_url(monkeypatch) -> None:
+    """El validador SSRF bloquea destinos RFC1918 / loopback."""
+
+    import asyncio
+
+    monkeypatch.setattr(
+        automations.settings,
+        "WEBHOOK_OUTBOUND_SECRET",
+        "test-webhook-outbound-secret-32-chars",
+    )
+    for blocked in ("http://10.0.0.1/hook", "http://127.0.0.1:9000/x", "http://192.168.1.5/x"):
+        result = asyncio.run(
+            automations.send_webhook(
+                url=blocked, payload={"x": 1}, idempotency_key=f"idem-{blocked}"
+            )
+        )
+        assert result["status"] == "rejected", (blocked, result)
+        assert result["accepted"] is False
+        assert "private_network" in result["error"], (blocked, result)
 
 
 # ---------------------------------------------------------------------------

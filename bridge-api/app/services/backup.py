@@ -30,7 +30,8 @@ import json
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import DateTime, Numeric, create_engine
+import sqlalchemy as sa
+from sqlalchemy import DateTime, Numeric, create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import Base
@@ -39,6 +40,128 @@ from app.database import Base
 # cambia, bump de esta constante para invalidar restores incompatibles.
 SCHEMA_VERSION = "0005"
 SCHEMA_VERSION_KEY = "schema_version"
+
+# Tabla efímera usada como marker de "destino preparado para restore".
+# Sólo se crea en bases explícitamente preparadas por ``prepare_restore_target``
+# y sirve para que ``restore_to_url`` distinga un motor recién inicializado de
+# una base con datos reales (que jamás debe ser sobrescrita).
+RESTORE_MARKER_TABLE = "_bridge_restore_marker"
+RESTORE_MARKER_ROW = {"id": 1, "marker": "prepared"}
+
+
+class RestoreSafetyError(RuntimeError):
+    """El destino del restore no es seguro para sobrescritura."""
+
+
+def prepare_restore_target(database_url: str, *, schema_version: str | None = None) -> dict[str, Any]:
+    """Prepara una base NUEVA con un marker efímero para ``restore_to_url``.
+
+    Crea el esquema vacío (sin tablas de aplicación) y deja únicamente la
+    tabla ``_bridge_restore_marker`` con un único registro. Esta función es
+    la única vía autorizada para autorizar un destino de restore: cualquier
+    base que no contenga el marker es considerada ocupada y rechazada por
+    ``restore_to_url``.
+
+    Se delega la creación de esquema a ``Base.metadata.create_all`` sobre una
+    transacción que luego descarta todas las tablas de modelo. El motor se
+    desecha tras crear el marker para evitar usos cruzados.
+    """
+
+    engine = create_engine(database_url)
+    try:
+        inspector = inspect(engine)
+        existing = set(inspector.get_table_names())
+        app_tables = {t.name for t in Base.metadata.sorted_tables}
+        # Si la base tiene tablas de modelo, no la preparamos: no podemos
+        # distinguir entre "vacía porque se inicializó ahora" y "vacía
+        # porque alguien acaba de dropear todo accidentalmente". El caller
+        # debe apuntar a una base recién creada (CREATE DATABASE) sin más
+        # objetos.
+        if app_tables & existing:
+            raise RestoreSafetyError(
+                "El destino contiene tablas de aplicación. Crea una base nueva "
+                "(CREATE DATABASE) y vuelve a llamar a prepare_restore_target."
+            )
+        if RESTORE_MARKER_TABLE in existing:
+            raise RestoreSafetyError(
+                "El destino ya tiene un marker de restore previo. "
+                "Usa una base recién creada o ejecuta undo_restore_target antes."
+            )
+        # Crea el esquema de aplicación, añade el marker y borra las tablas
+        # de modelo dejando únicamente el marker.
+        Base.metadata.create_all(engine)
+        # Usamos SQLAlchemy core portable para crear el marker (evita
+        # peculiaridades de dialecto en tipos como ``TIMESTAMP``).
+        marker_table = sa.Table(
+            RESTORE_MARKER_TABLE,
+            sa.MetaData(),
+            sa.Column("id", sa.Integer, primary_key=True),
+            sa.Column("marker", sa.String(64), nullable=False),
+            sa.Column("schema_version", sa.String(32), nullable=True),
+            sa.Column("created_at", sa.DateTime, nullable=False),
+        )
+        marker_table.create(engine, checkfirst=True)
+        with engine.begin() as conn:
+            conn.execute(
+                marker_table.insert().values(
+                    id=RESTORE_MARKER_ROW["id"],
+                    marker=RESTORE_MARKER_ROW["marker"],
+                    schema_version=schema_version or SCHEMA_VERSION,
+                    created_at=datetime.datetime.now(datetime.UTC).replace(tzinfo=None),
+                )
+            )
+            # Borrado explícito de las tablas de modelo (que create_all
+            # acaba de crear) para dejar el destino con sólo el marker.
+            # ``CASCADE`` es PostgreSQL; en SQLite se omite para no romper
+            # el dialecto hermético.
+            dialect_name = getattr(engine.dialect, "name", "")
+            for table in sorted(app_tables, reverse=True):
+                if dialect_name == "postgresql":
+                    conn.execute(text(f"DROP TABLE IF EXISTS {table} CASCADE"))
+                else:
+                    conn.execute(text(f"DROP TABLE IF EXISTS {table}"))
+    finally:
+        engine.dispose()
+    return {"prepared": True, "schema_version": schema_version or SCHEMA_VERSION}
+
+
+def undo_restore_target(database_url: str) -> dict[str, Any]:
+    """Elimina el marker de restore. Útil para preparar el destino de tests."""
+
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {RESTORE_MARKER_TABLE}"))
+    finally:
+        engine.dispose()
+    return {"undone": True}
+
+
+def _assert_restore_marker(engine: Any) -> None:
+    """Verifica que la base destino contiene el marker autorizado.
+
+    Lanza ``RestoreSafetyError`` si el marker no existe o es incorrecto, o si
+    la base tiene tablas de modelo que no han sido borradas por
+    ``restore_backup``. Esta función es la ÚNICA barrera que evita que un
+    URL incorrecto apunte a una base con datos y los destruya.
+    """
+
+    inspector = inspect(engine)
+    existing = set(inspector.get_table_names())
+    if RESTORE_MARKER_TABLE not in existing:
+        raise RestoreSafetyError(
+            "La base destino NO contiene un marker de restore. "
+            "Ejecuta prepare_restore_target(database_url) en una base recién "
+            "creada antes de restaurar."
+        )
+    app_tables = {t.name for t in Base.metadata.sorted_tables}
+    overlap = app_tables & existing
+    if overlap:
+        raise RestoreSafetyError(
+            f"La base destino tiene tablas de aplicación antes de restaurar: "
+            f"{sorted(overlap)}. Esto indica una base ocupada; se aborta el "
+            "restore para evitar destruir datos."
+        )
 
 
 def _serialize_value(value: Any) -> Any:
@@ -163,11 +286,31 @@ def verify_backup(db: Session, backup: dict[str, Any], *, installation_id: str |
 
 
 def restore_to_url(backup: dict[str, Any], database_url: str) -> dict[str, Any]:
-    """Restaura un manifiesto a una base vacía dada por URL (para pruebas/E2E)."""
+    """Restaura un manifiesto a una base NUEVA y explícitamente preparada.
+
+    Por seguridad esta función NO llama a ``drop_all`` sobre el destino. Sólo
+    es válida cuando la base destino contiene el marker
+    ``_bridge_restore_marker`` insertado por ``prepare_restore_target`` y no
+    contiene tablas de aplicación; cualquier otro caso se rechaza con
+    ``RestoreSafetyError``.
+
+    El flujo correcto para un restore a una base nueva es::
+
+        admin.execute("CREATE DATABASE backup_target")
+        backup.prepare_restore_target(target_url)
+        backup.restore_to_url(manifest, target_url)
+
+    Llamadas accidentales a una URL equivocada (otra base con datos) o a una
+    base que ya contiene tablas de aplicación serán abortadas sin tocar
+    ningún dato.
+    """
 
     engine = create_engine(database_url)
     try:
-        Base.metadata.drop_all(engine)
+        _assert_restore_marker(engine)
+        # Borra el marker para que el esquema de la aplicación quede limpio.
+        with engine.begin() as conn:
+            conn.execute(text(f"DROP TABLE IF EXISTS {RESTORE_MARKER_TABLE}"))
         return restore_backup(engine, backup)
     finally:
         engine.dispose()

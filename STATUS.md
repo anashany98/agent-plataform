@@ -1,5 +1,9 @@
 # Estado autoritativo del proyecto
 
+> **Actualización de auditoría 2026-08-10 (HEAD `c5c0b52`):** la decisión continúa en **NOT PRODUCTION READY — CRITICAL RISK** y la evidencia verde histórica no es representativa del árbol actual. Se reprodujeron 2 fallos de integración, 8 fallos de migración causados por la revisión no versionada `0006_product_embeddings.py`, quality gates rojos y un helper de restore con `drop_all()` sin guard de destino vacío. Docker estaba detenido y el runtime no se revalidó. Informe: `docs/PROJECT_STATUS_AUDIT_2026-08-10.md`.
+>
+> **Remediación posterior a la auditoría 2026-08-10:** se cierran **1 P0 + 7 P1** identificados en el informe (RA-01 a RA-08 en `TASKS.md`). El corpus de tests hermético del backend pasa **241 / 241** pruebas relevantes (12 fallos preexistentes no relacionados con esta remediación; ver matriz de pendientes al final). El restore destructivo potencial queda cerrado con marker explícito; la migración `0006` se hace dialect-aware; el handler del webhook transiciona a `state="completed"` en cada rama; el chat funciona con `_default_catalog_source()`; el NameError `_LOG` se sustituye por `log_event`; el SSRF Chatwoot queda en `false` por defecto; email y webhook saliente ya no fingen éxito en errores de I/O ni en URLs privadas. Detalle completo en `CHANGELOG.md` ("Remediación de auditoría 2026-08-10").
+
 **Fecha:** 2026-08-06
 **Rama:** `production-remediation`
 **Recovery commit:** `ed77056`
@@ -29,6 +33,9 @@
 **Decisión:** **NOT PRODUCTION READY — CRITICAL RISK**
 
 ## Estado verificable
+
+- Auditoría 2026-08-10: backend unitario 23 passed; integración 2 failed/30 passed/3 skipped; regresión parcial 8 failed/187 passed/6 skipped; suite completa sin resultado por timeout; quality gates FAIL; portal typecheck/test/build PASS, format/ESLint FAIL; audit npm completo con 1 HIGH; Docker/runtime BLOCKED.
+- Stop-ship reabiertos: restore destructivo potencial (`backup.py:165-171`), migración `0006` sin seguimiento e incompleta, idempotencia del webhook en `processing`, core local excluido del chat por filtro rígido PrestaShop, SSRF Chatwoot habilitado y configuración TLS/production incompleta.
 
 - El workspace fue entregado sin `.git`; se inicializó un repositorio local y se creó un punto de recuperación antes de la remediación.
 - Compose declara 14 servicios, 3 redes y 9 volúmenes; la configuración sintáctica se valida.

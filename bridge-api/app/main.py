@@ -514,6 +514,56 @@ def _complete_idempotency(
         db.commit()
 
 
+def _complete_idempotency_if_pending(
+    db: Session,
+    key: str,
+    owner_id: str,
+    response: Dict[str, Any],
+    status_code: int = 200,
+    *,
+    commit: bool = True,
+) -> bool:
+    """Completa la operación idempotente si sigue en ``processing``.
+
+    Es el finalizador canónico de los webhooks: las ramas de éxito pueden
+    hacer ``return`` temprano después de un ``_checkpoint_idempotency`` (que
+    guarda ``response_body`` para recuperación de crash pero deja el estado
+    en ``processing``); el ``try/finally`` del handler llama a este
+    finalizador para asegurar que el estado transita a ``completed`` y un
+    replay devuelve el resultado cacheado en lugar de 202 ``processing``.
+
+    Returns True si la transición a ``completed`` ocurrió, False si el
+    registro ya estaba completado/fallido (idempotente, no error).
+    """
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+    completed = db.execute(
+        update(IdempotencyRecord)
+        .where(
+            IdempotencyRecord.idempotency_key == key,
+            IdempotencyRecord.state == "processing",
+            IdempotencyRecord.owner_id == owner_id,
+        )
+        .values(
+            state="completed",
+            owner_id=None,
+            lease_expires_at=None,
+            heartbeat_at=now,
+            updated_at=now,
+            response_body=response,
+            status_code=status_code,
+            last_error=None,
+        )
+    )
+    if completed.rowcount == 0:
+        # Ya completado o fallido por una rama anterior; nada que hacer.
+        if commit:
+            db.commit()
+        return False
+    if commit:
+        db.commit()
+    return True
+
+
 def _fail_idempotency(db: Session, key: str, owner_id: str, error: Exception, status_code: int = 500) -> None:
     db.rollback()
     now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
@@ -836,7 +886,7 @@ async def _handle_product_comparison(db: Session, *, content: str, limit: int):
     found: List[Dict[str, Any]] = []
     seen_ids: set[str] = set()
     for name in product_names:
-        results = tools.search_products(name, limit=2, source="prestashop")
+        results = tools.search_products(name, limit=2, source=_default_catalog_source())
         for r in results:
             if r["id"] in seen_ids:
                 continue
@@ -874,7 +924,7 @@ async def _build_catalog_categories_summary(db: Session, *, tools, limit: int) -
     ejemplo representativo por cada una. NO lista los productos uno a
     uno: el chat debe redirigir a la web.
     """
-    products = tools.search_products("", limit=10_000, source="prestashop")
+    products = tools.search_products("", limit=10_000, source=_default_catalog_source())
     by_category: Dict[str, List[Dict[str, Any]]] = {}
     for product in products:
         category = (product.get("category") or "Otros").strip() or "Otros"
@@ -897,7 +947,7 @@ async def _build_catalog_categories_summary(db: Session, *, tools, limit: int) -
 
 def _build_categories_brief(db: Session, *, tools, limit: int) -> Dict[str, Any]:
     """Resumen ligero de categorías para el modo 'browse prompt'."""
-    products = tools.search_products("", limit=10_000, source="prestashop")
+    products = tools.search_products("", limit=10_000, source=_default_catalog_source())
     by_category: Dict[str, int] = {}
     for product in products:
         category = (product.get("category") or "Otros").strip() or "Otros"
@@ -969,6 +1019,29 @@ def _authoritative_prestashop_tax_rate(remote: Dict[str, Any]) -> Decimal:
     if tax_rate < 0 or tax_rate > 1:
         raise PrestaShopIntegrationError("PrestaShop devolvió un tipo impositivo fuera de rango")
     return tax_rate
+
+
+def _default_catalog_source() -> Optional[str]:
+    """Devuelve la fuente de catálogo por defecto que verá el chat comercial.
+
+    - Si PrestaShop está configurado: ``"prestashop"`` para mostrar
+      exclusivamente productos sincronizados de la tienda.
+    - Si PrestaShop NO está configurado: ``None`` para mostrar todos los
+      productos visibles del catálogo local (incluidos los de importación
+      manual). Esto garantiza que el core funcione sin PrestaShop, alineado
+      con el requisito de operación independiente.
+
+    El helper es el ÚNICO punto del módulo que decide la fuente por
+    defecto; todas las llamadas del chat deben usarlo en lugar de
+    hardcodear ``source="prestashop"``.
+    """
+
+    try:
+        if prestashop_adapter.configured():
+            return "prestashop"
+    except Exception:
+        pass
+    return None
 
 
 def _extract_confirmation_token(content: str) -> str | None:
@@ -1497,11 +1570,20 @@ async def receive_chatwoot_webhook(
     if resumed is not None:
         return resumed
 
+    # Marca local de "terminal idempotente ya ejecutado". Las ramas con
+    # ``return`` temprano deben poner esta bandera a True tras
+    # ``_complete_idempotency``; el ``finally`` la respeta para no
+    # sobrescribir la respuesta cacheada. Si una rama retorna sin llamar a
+    # ``_complete_idempotency`` (sólo ``_checkpoint_idempotency``), el
+    # ``finally`` finaliza la operación con el resultado del checkpoint.
+    terminal_done = False
+
     try:
         event = body.get("event")
         if event != "message_created":
             result = {"status": "received", "event": event}
             _complete_idempotency(db, idempotency_key, claim_owner, result)
+            terminal_done = True
             return result
 
         message_type = body.get("message_type")
@@ -1509,6 +1591,7 @@ async def receive_chatwoot_webhook(
         if message_type == "outgoing" or body.get("private") or not content:
             result = {"status": "processed", "action": "ignored"}
             _complete_idempotency(db, idempotency_key, claim_owner, result)
+            terminal_done = True
             return result
 
         conversation = body.get("conversation") or {}
@@ -1676,8 +1759,12 @@ async def receive_chatwoot_webhook(
             if locals().get("_trigger_fallback_to_else"):
                 raw_limit = int(getattr(settings, "CATALOG_OVERVIEW_LIMIT", 500) or 500)
                 overview_limit = max(1, min(raw_limit, 10_000))
+                # Fuente dinámica: prestashop cuando está configurado,
+                # todos los productos visibles del catálogo local en otro
+                # caso. El core sigue funcionando sin PrestaShop.
+                catalog_source = _default_catalog_source()
                 verified_products = tools.search_products(
-                    "", limit=overview_limit, source="prestashop"
+                    "", limit=overview_limit, source=catalog_source
                 )
                 action_label = "catalog_browse_prompt"
                 _trigger_fallback_to_else = False
@@ -1729,6 +1816,8 @@ async def receive_chatwoot_webhook(
                     "reply": reply,
                 }
                 _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                _complete_idempotency(db, idempotency_key, claim_owner, result)
+                terminal_done = True
                 return result
 
             # ----------------------------------------------------------------
@@ -1768,6 +1857,8 @@ async def receive_chatwoot_webhook(
                         "llm_provider": provider_used,
                     }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                    _complete_idempotency(db, idempotency_key, claim_owner, result)
+                    terminal_done = True
                     # Early return: la comparación cubre la intención de
                     # catálogo del cliente sin pasar por el fallback.
                     return result
@@ -1783,7 +1874,7 @@ async def receive_chatwoot_webhook(
             # ----------------------------------------------------------------
             if full_catalog_request:
                 verified_products = tools.search_products(
-                    "", limit=overview_limit, source="prestashop"
+                    "", limit=overview_limit, source=_default_catalog_source()
                 )
                 if verified_products:
                     # LLM genera la respuesta en lenguaje natural con
@@ -1842,6 +1933,8 @@ async def receive_chatwoot_webhook(
                         "llm_provider": provider_used,
                     }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                    _complete_idempotency(db, idempotency_key, claim_owner, result)
+                    terminal_done = True
                     return result
 
             # ----------------------------------------------------------------
@@ -1853,7 +1946,7 @@ async def receive_chatwoot_webhook(
                 scoped_products = tools.search_products(
                     _humanize_category(domain_hint),
                     limit=overview_limit,
-                    source="prestashop",
+                    source=_default_catalog_source(),
                 )
 
             specific_products: List[Dict[str, Any]] = []
@@ -1862,7 +1955,7 @@ async def receive_chatwoot_webhook(
                 # (catálogo real de la tienda). Las recomendaciones
                 # puntuales también filtran por source='prestashop'.
                 specific_products = tools.search_products(
-                    content, limit=overview_limit, source="prestashop"
+                    content, limit=overview_limit, source=_default_catalog_source()
                 )
 
             if scoped_products:
@@ -1877,7 +1970,7 @@ async def receive_chatwoot_webhook(
                 # cliente ha hecho una pregunta de catálogo y la
                 # respuesta debe incluir el catálogo real completo.
                 verified_products = tools.search_products(
-                    "", limit=overview_limit, source="prestashop"
+                    "", limit=overview_limit, source=_default_catalog_source()
                 )
                 if not verified_products:
                     reply = (
@@ -1898,6 +1991,8 @@ async def receive_chatwoot_webhook(
                         "reply": reply,
                     }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                    _complete_idempotency(db, idempotency_key, claim_owner, result)
+                    terminal_done = True
                     return result
                 # Si hay dominio (categoría) pero no hay productos en
                 # esa categoría, decimos claramente "no tenemos X" y
@@ -1943,6 +2038,8 @@ async def receive_chatwoot_webhook(
                         "llm_provider": provider_used,
                     }
                     _checkpoint_idempotency(db, idempotency_key, claim_owner, result)
+                    _complete_idempotency(db, idempotency_key, claim_owner, result)
+                    terminal_done = True
                     return result
                 action_label = "catalog_full_list"
             else:
@@ -1980,7 +2077,14 @@ async def receive_chatwoot_webhook(
                     reply = ai_reply["answer"]
                     provider_used = ai_reply["provider"]
                 except Exception as exc:
-                    _LOG.warning("commerce_chat failed, fallback to extractive: %s", exc)
+                    from app.services.observability import log_event as _log_event
+
+                    _log_event(
+                        "WARNING",
+                        "commerce_chat_failed_fallback_extractive",
+                        error_type=type(exc).__name__,
+                        error_message=str(exc)[:500],
+                    )
                     # Fallback determinista: bullet list básico.
                     lines = []
                     for product in verified_products:
@@ -2068,6 +2172,41 @@ async def receive_chatwoot_webhook(
     except Exception as exc:
         _fail_idempotency(db, idempotency_key, claim_owner, exc)
         raise
+    finally:
+        # Cierre defensivo: si una rama temprana hizo ``return`` después de
+        # ``_checkpoint_idempotency`` sin llamar a ``_complete_idempotency``,
+        # el estado quedaba en ``processing`` y un replay devolvía 202
+        # ``processing``. El ``finally`` finaliza la operación idempotente
+        # con el último ``response_body`` checkpointado si la rama no lo
+        # hizo ya (banderas ``terminal_done`` o presencia de respuesta
+        # cacheada en estado ``processing``).
+        if not terminal_done:
+            try:
+                pending = (
+                    db.query(IdempotencyRecord)
+                    .filter(IdempotencyRecord.idempotency_key == idempotency_key)
+                    .first()
+                )
+                if pending is not None and pending.state == "processing":
+                    fallback = pending.response_body if isinstance(pending.response_body, dict) else {
+                        "status": "ignored",
+                        "reason": "no_terminal_completion",
+                    }
+                    _complete_idempotency_if_pending(
+                        db, idempotency_key, claim_owner, fallback
+                    )
+            except Exception:
+                # No podemos dejar el lease vivo si el ``finally`` falla: lo
+                # marcamos como fallido para no bloquear futuros takeovers.
+                try:
+                    _fail_idempotency(
+                        db,
+                        idempotency_key,
+                        claim_owner,
+                        RuntimeError("webhook_terminate_failed"),
+                    )
+                except Exception:
+                    pass
 
 
 @app.post("/webhooks/activepieces", tags=["Webhooks"])

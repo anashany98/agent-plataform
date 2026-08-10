@@ -116,6 +116,7 @@ class EmailResult:
     subject: str
     accepted: bool
     reference: str
+    error: str | None = None
 
 
 class LocalEmailProvider:
@@ -138,10 +139,14 @@ class LocalEmailProvider:
                 ),
                 encoding="utf-8",
             )
-        except OSError:
-            # El proveedor local nunca debe romper la automatización; la
-            # memoria basta para auditoría en memoria y tests.
-            pass
+        except OSError as exc:
+            # El proveedor local debe reportar el error en lugar de fingir
+            # éxito: aceptar=False fuerza a la automatización a tratar el
+            # envío como fallido y, si está conectada a un outbox/cola, a
+            # reintentar o escalar. La auditoría recibe el motivo del fallo.
+            return EmailResult(self.name, to, subject, False, reference=reference, error=(
+                f"local_provider_io_error:{type(exc).__name__}:{str(exc)[:200]}"
+            ))
         result = EmailResult(self.name, to, subject, True, reference)
         self.sent.append(result)
         return result
@@ -163,20 +168,57 @@ def get_local_provider() -> LocalEmailProvider:
 
 
 def send_email(db: Session, *, to: str, subject: str, body: str, actor: str | None = None) -> EmailResult:
-    """Envía por el proveedor configurado (por defecto local, sin red)."""
+    """Envía por el proveedor configurado (por defecto local, sin red).
+
+    Política estricta: si el proveedor configurado no existe en el registro
+    o falla al inicializar, NO se hace fallback silencioso a local (eso
+    sería un éxito falso). El error se devuelve con `accepted=False` y se
+    registra como fallo en la auditoría. El caller puede optar por
+    ``send_email(...)`` con ``provider_fallback=True`` explícito cuando
+    realmente quiera degradar de forma controlada (p. ej. en
+    auto-configuración de desarrollo).
+    """
 
     name = (settings.EMAIL_PROVIDER or "local").lower()
     provider = _EMAIL_PROVIDERS.get(name)
     if provider is None:
-        # Proveedor externo no disponible en este entorno: caer a local para
-        # no perder el efecto y mantener la automatización verificable.
-        provider = get_local_provider()
+        # Fallar cerrado: reportar el error y dejar que la cola/outbox
+        # reintente. NO fingir éxito cayendo a local sin pedirlo.
+        result = EmailResult(
+            provider=name,
+            to=to,
+            subject=subject,
+            accepted=False,
+            reference=f"failed-{uuid.uuid4().hex[:12]}",
+            error=f"email_provider_not_registered:{name}",
+        )
+        _audit(
+            db,
+            event_type="automation.email_failed",
+            status_value="error",
+            details={
+                "to": to,
+                "subject": subject,
+                "provider": name,
+                "error": result.error,
+            },
+            actor=actor,
+        )
+        return result
     result = provider.send(to, subject, body)
     _audit(
         db,
-        event_type="automation.email_sent",
-        status_value="success",
-        details={"to": to, "subject": subject, "provider": result.provider, "reference": result.reference},
+        event_type=(
+            "automation.email_sent" if result.accepted else "automation.email_failed"
+        ),
+        status_value="success" if result.accepted else "error",
+        details={
+            "to": to,
+            "subject": subject,
+            "provider": result.provider,
+            "reference": result.reference,
+            "error": result.error,
+        },
         actor=actor,
     )
     return result
@@ -366,27 +408,144 @@ def sign_webhook_payload(payload: bytes, secret: str) -> str:
     return hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
+def _resolve_outbound_webhook_secret() -> tuple[str, str]:
+    """Resuelve (secret, key_id) para firmar webhooks salientes.
+
+    Política estricta: NO se usa la ``idempotency_key`` ni el ``url`` como
+    secreto HMAC. Si ``WEBHOOK_OUTBOUND_SECRET`` no está configurado,
+    abortamos el envío para no exponer un secreto derivado.
+    """
+
+    secret = settings.WEBHOOK_OUTBOUND_SECRET
+    if not secret or len(secret) < 32:
+        raise RuntimeError(
+            "WEBHOOK_OUTBOUND_SECRET ausente o demasiado corto. "
+            "Configura un secreto de al menos 32 caracteres; NO se usa la "
+            "idempotency_key como fallback (ver auditoría 2026-08-10)."
+        )
+    key_id = getattr(settings, "WEBHOOK_OUTBOUND_KEY_ID", None) or "primary"
+    return secret, key_id
+
+
+def _assert_outbound_url_allowed(url: str) -> None:
+    """Valida que la URL destino NO apunte a redes privadas o loopback.
+
+    Defensa SSRF: bloquea RFC1918 (10/8, 172.16/12, 192.168/16),
+    loopback (127/8, ::1), link-local (169.254/16, fe80::/10) y
+    metadata cloud (169.254.169.254). Permite HTTPS público y dominios
+    explícitamente allowlistados vía ``WEBHOOK_OUTBOUND_ALLOWED_HOSTS``.
+    """
+
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"webhook_scheme_not_allowed:{parsed.scheme}")
+    host = (parsed.hostname or "").lower()
+    if not host:
+        raise ValueError("webhook_host_missing")
+
+    # Allowlist explícita tiene prioridad.
+    allowed_hosts = {
+        h.strip().lower()
+        for h in (getattr(settings, "WEBHOOK_OUTBOUND_ALLOWED_HOSTS", "") or "").split(",")
+        if h.strip()
+    }
+    if host in allowed_hosts:
+        return
+
+    # Si la URL es pública (HTTPS) y el host NO se resuelve a IP privada
+    # en este momento, la dejamos pasar. La resolución DNS se valida en
+    # ``_assert_outbound_ip_allowed`` justo antes de abrir la conexión.
+    try:
+        import ipaddress
+        import socket
+
+        infos = socket.getaddrinfo(host, parsed.port or 443)
+        for info in infos:
+            sockaddr = info[4]
+            ip = sockaddr[0]
+            try:
+                ip_obj = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            if (
+                ip_obj.is_private
+                or ip_obj.is_loopback
+                or ip_obj.is_link_local
+                or ip_obj.is_multicast
+                or ip_obj.is_reserved
+                or ip_obj.is_unspecified
+            ):
+                raise ValueError(
+                    f"webhook_private_network_blocked:{host}->{ip}"
+                )
+    except socket.gaierror as exc:
+        raise ValueError(f"webhook_dns_resolution_failed:{host}") from exc
+
+
 async def send_webhook(*, url: str, payload: dict[str, Any], idempotency_key: str) -> dict[str, Any]:
-    """Envía un webhook saliente firmado; la firma usa la clave del destino."""
+    """Envía un webhook saliente firmado; la firma usa la clave del destino.
+
+    Política endurecida (auditoría 2026-08-10):
+    - Secreto obligatorio desde configuración (``WEBHOOK_OUTBOUND_SECRET``);
+      no se usa la ``idempotency_key`` como HMAC.
+    - Cabeceras con ``key_id`` y ``timestamp`` para rotación y anti-replay.
+    - Validación SSRF previa al envío (allowlist + bloqueo de redes
+      privadas / loopback / metadata cloud).
+    - Errores devueltos con ``accepted=False`` en lugar de fingir éxito.
+    """
 
     body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-    secret = settings.WEBHOOK_OUTBOUND_SECRET or idempotency_key
+
+    try:
+        _assert_outbound_url_allowed(url)
+        secret, key_id = _resolve_outbound_webhook_secret()
+    except (RuntimeError, ValueError) as exc:
+        # Devolver sin lanzar excepción: la automatización debe saber
+        # que el envío no ocurrió y el orquestador puede reencolarlo o
+        # escalarlo.
+        return {
+            "status": "rejected",
+            "idempotency_key": idempotency_key,
+            "error": str(exc),
+            "accepted": False,
+        }
+
+    timestamp = str(int(_utcnow().timestamp()))
     signature = sign_webhook_payload(body, secret)
-    response = await guarded_request_with_retry(
-        "webhook",
-        lambda: httpx.AsyncClient(timeout=20).request(
-            "POST",
-            url,
-            content=body,
-            headers={
-                "Content-Type": "application/json",
-                "X-Bridge-Webhook-Id": idempotency_key,
-                "X-Bridge-Webhook-Signature": f"sha256={signature}",
-            },
-        ),
-    )
-    response.raise_for_status()
-    return {"status": "sent", "idempotency_key": idempotency_key, "signature": f"sha256={signature}"}
+    try:
+        response = await guarded_request_with_retry(
+            "webhook",
+            lambda: httpx.AsyncClient(timeout=20).request(
+                "POST",
+                url,
+                content=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Bridge-Webhook-Id": idempotency_key,
+                    "X-Bridge-Webhook-Signature": f"sha256={signature}",
+                    "X-Bridge-Webhook-Key-Id": key_id,
+                    "X-Bridge-Webhook-Timestamp": timestamp,
+                },
+            ),
+        )
+        response.raise_for_status()
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "idempotency_key": idempotency_key,
+            "error": f"{type(exc).__name__}:{str(exc)[:200]}",
+            "accepted": False,
+        }
+    return {
+        "status": "sent",
+        "idempotency_key": idempotency_key,
+        "signature": f"sha256={signature}",
+        "key_id": key_id,
+        "timestamp": timestamp,
+        "accepted": True,
+    }
 
 
 # ---------------------------------------------------------------------------
