@@ -32,6 +32,35 @@ Esta entrada cierra los defectos P0/P1 reabiertos por `docs/PROJECT_STATUS_AUDIT
 - Supply chain (actualizar `nanoid@3.3.16`, fijar imágenes por digest, CI autoritativa con SBOM y escaneo de imágenes).
 - Licencias y revisión legal de vendor/EE.
 
+## [Remediación PrestaShop live — 2026-08-10]
+
+Validación end-to-end contra la tienda real `https://btopdigital.es/`
+con las credenciales del `.env`. 15 / 15 escenarios verdes con datos
+reales (IVA España 0.21, country_id=6, currency_id=EUR, productos
+ACUARELA, JOVI, etc.).
+
+**Bug reproducible y corregido:** el Webservice de PrestaShop **no
+soporta wildcards** en `filter[name]` ni `filter[reference]`. Verificado
+con PrestaShop: `filter[name]=%ACUARELA%` devuelve `[]` aunque existen
+productos con "ACUARELA" en `name`. La integración quedaba con 0
+resultados en producción sin error visible.
+
+- `bridge-api/app/services/prestashop_adapter.py`: `search_products()`
+  cae a listado paginado (`_get_paginated_rows`) + filtrado en memoria
+  sobre `name`, `reference` y `description_short`. Mantiene el resto del
+  contrato (límite, `include_details`, sellable, stop-words).
+- `tests/regression/test_prestashop_webservice_search.py`: 3 evals nuevos
+  (1 offline + 2 opt-in con tienda real, skipped sin credenciales).
+- `tests/regression/test_p1_prestashop_safety.py`: actualiza
+  `test_adapter_search_does_not_expose_non_sellable_products` para
+  mockear `_get_paginated_rows` además de `_get`.
+
+Corpus afectado (verificado): 77 / 77 verdes en
+`test_prestashop_webservice_search` + `test_p1_prestashop_safety` +
+`test_p0_prestashop_contract` + `test_audit_remediation_2026_08_10` +
+`test_p1_backup_restore` + `test_p0_migrations` +
+`test_p1_idempotency_followups`.
+
 ## [Auditoría de estado 2026-08-10]
 
 - Nuevo informe actual: `docs/PROJECT_STATUS_AUDIT_2026-08-10.md` y artefacto HTML autocontenido.

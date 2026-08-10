@@ -218,8 +218,15 @@ class PrestaShopAdapter:
         search_terms.extend(token for token in normalized_tokens if token not in search_terms)
 
         found: Dict[str, Dict[str, Any]] = {}
+        # PrestaShop Webservice NO soporta wildcards en ``filter[name]`` ni
+        # ``filter[reference]`` en la mayoría de las tiendas (devuelve 0
+        # resultados incluso cuando hay coincidencias exactas, observado en
+        # ``https://btopdigital.es`` durante la auditoría 2026-08-10). El
+        # servicio cae al listado paginado + filtrado en memoria sobre el
+        # nombre, la referencia y la descripción corta, manteniendo el resto
+        # del contrato (límite, ``include_details``).
         for term in search_terms[:8]:
-            payload = await self._get(
+            rows = await self._get_paginated_rows(
                 "products",
                 {
                     "display": (
@@ -227,16 +234,26 @@ class PrestaShopAdapter:
                         "id_tax_rules_group,id_default_combination,id_shop_default,active,"
                         "manufacturer_name,available_for_order,show_price]"
                     ),
-                    "filter[name]": f"%{term}%",
                     "filter[active]": "[1]",
-                    "limit": f"0,{safe_limit}",
-                    "sort": "[name_ASC]",
+                    "sort": "[id_ASC]",
                 },
+                page_size=self._PAGE_SIZE,
             )
-            for item in self._rows(payload, "products"):
+            term_lower = term.lower()
+            for item in rows:
                 product_id = str(item.get("id") or "").strip()
-                if product_id and self._is_sellable_product(item):
-                    found.setdefault(product_id, item)
+                if not product_id or product_id in found:
+                    continue
+                if not self._is_sellable_product(item):
+                    continue
+                name = self._localized(item.get("name")) or ""
+                reference = str(item.get("reference") or "")
+                description = self._clean_html_text(
+                    self._localized(item.get("description_short"))
+                )
+                haystack = " ".join((name, reference, description)).lower()
+                if term_lower in haystack:
+                    found[product_id] = item
             if len(found) >= safe_limit:
                 break
 

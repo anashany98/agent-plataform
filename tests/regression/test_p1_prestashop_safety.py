@@ -314,8 +314,18 @@ def test_adapter_search_does_not_expose_non_sellable_products(
         assert resource == "products"
         return {"products": [deepcopy(raw_product)]}
 
+    async def fake_paginated_rows(
+        resource: str, params: dict[str, Any], *, page_size: int = 500
+    ) -> list[dict[str, Any]]:
+        # El adapter ahora pagina con ``_get_paginated_rows`` y filtra en
+        # memoria porque el webservice de PrestaShop no soporta wildcards en
+        # ``filter[name]`` (verificado contra btopdigital.es 2026-08-10).
+        assert resource == "products"
+        return [deepcopy(raw_product)]
+
     adapter = _adapter()
     adapter._get = fake_get  # type: ignore[method-assign]
+    adapter._get_paginated_rows = fake_paginated_rows  # type: ignore[method-assign]
 
     assert asyncio.run(adapter.search_products("oculto", include_details=False)) == []
 
