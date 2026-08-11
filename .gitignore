@@ -48,3 +48,6 @@ clients/*/backups/
 clients/*/documents/private/
 clients/*/imports/private/
 .dev/
+
+# Freebuff desktop app local state
+.freebuff/
