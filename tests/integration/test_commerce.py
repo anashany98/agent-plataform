@@ -188,37 +188,51 @@ def test_generic_recommendation_uses_only_verified_catalog_data(client, auth_hea
     assert body.get('llm') is None
 
 
-def _skip_if_no_prestashop_catalog():
+def _skip_if_no_verified_catalog():
+    """Salta si la BD test no tiene ningún producto de catálogo verificable.
+
+    Tras RA-04 el resumen de catálogo es agnóstico a la fuente: usa
+    PrestaShop cuando está configurado y el catálogo local en caso
+    contrario, así que basta con que exista cualquier producto de una
+    fuente de catálogo de confianza.
+    """
+
     from app.database import SessionLocal
     from app.models.models import Product
 
     db = SessionLocal()
     try:
-        n = db.query(Product).filter(Product.source == "prestashop").count()
+        n = (
+            db.query(Product)
+            .filter(Product.source.in_(("prestashop", "local", "import")))
+            .count()
+        )
     finally:
         db.close()
     if n == 0:
         import pytest
-        pytest.skip("No hay productos PrestaShop sincronizados en la BD test")
+        pytest.skip("No hay productos de catálogo verificable en la BD test")
 
 
-def test_generic_catalog_inquiry_returns_prestashop_overview(client):
-    """Una pregunta genérica tipo "¿qué tenéis?" debe listar productos del
-    catálogo sincronizado desde PrestaShop en lugar de transferir al equipo
-    comercial o de abstenerse.
+def test_generic_catalog_inquiry_returns_verified_overview(client):
+    """Una pregunta genérica tipo "¿qué tenéis?" debe listar el catálogo
+    verificado (PrestaShop cuando está configurado, catálogo local en caso
+    contrario, RA-04) en lugar de transferir al equipo comercial o de
+    abstenerse.
     """
 
-    _skip_if_no_prestashop_catalog()
+    _skip_if_no_verified_catalog()
 
     payload = quote_message(8808, '¿Qué tenéis disponible?')
     response = signed(client, payload)
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body['action'] == 'catalog_overview'
-    assert body['products'], 'El catálogo sincronizado debe contener productos'
-    # El catálogo overview debe contener exclusivamente productos PrestaShop.
+    assert body['action'] == 'catalog_full_list'
+    assert body['products'], 'El catálogo verificado debe contener productos'
+    # El resumen solo expone fuentes de catálogo de confianza: nunca demo
+    # ni productos sintéticos de pruebas internas.
     for product in body['products']:
-        assert product['source'] == 'prestashop', product
+        assert product['source'] in ('prestashop', 'local', 'import'), product
     assert 'presupuesto' in body['reply'].lower()
     # El LLM nunca debe inventar productos en este flujo.
     assert body.get('llm') is None
@@ -230,13 +244,13 @@ def test_product_intent_falls_back_to_overview_when_no_specific_match(client):
     en lugar de transferir al equipo comercial.
     """
 
-    _skip_if_no_prestashop_catalog()
+    _skip_if_no_verified_catalog()
 
     payload = quote_message(8909, 'tienes algo exótico?')
     response = signed(client, payload)
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body['action'] == 'catalog_overview'
+    assert body['action'] == 'catalog_full_list'
     assert body['products']
     assert body.get('llm') is None
 
@@ -258,7 +272,7 @@ def test_catalog_overview_limit_is_configurable(client):
     productos no se inventan, simplemente se devuelven los que haya.
     """
 
-    _skip_if_no_prestashop_catalog()
+    _skip_if_no_verified_catalog()
 
     from app.config import settings
 
@@ -267,7 +281,7 @@ def test_catalog_overview_limit_is_configurable(client):
     response = signed(client, payload)
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body['action'] == 'catalog_overview'
+    assert body['action'] == 'catalog_full_list'
     assert len(body['products']) <= expected_limit
-    # El default actual debe permitir agotar todo el catálogo sincronizado.
+    # El default actual debe permitir agotar todo el catálogo verificado.
     assert expected_limit >= 300

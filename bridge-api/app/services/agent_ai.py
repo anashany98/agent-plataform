@@ -27,9 +27,9 @@ una respuesta extractiva honesta.
 
 from __future__ import annotations
 
-import json
 import logging
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -200,8 +200,8 @@ async def commerce_chat(
     query: str,
     products: list[dict[str, Any]],
     intent: str,
-    extra_context: Optional[str] = None,
-    conversation_id: Optional[str] = None,
+    extra_context: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
     """Asistente comercial: genera una respuesta en lenguaje natural
     usando los productos PrestaShop facilitados como contexto.
@@ -261,7 +261,7 @@ async def commerce_chat(
         )
 
     provider_used = "extractive"
-    answer_text: Optional[str] = None
+    answer_text: str | None = None
 
     if _real_llm_configured():
         try:

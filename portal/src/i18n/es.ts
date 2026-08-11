@@ -4,22 +4,23 @@
  * aparecer en la navegación para no prometer funcionalidad fantasma.
  */
 export const translations = {
-  appName: 'Plataforma de Agentes IA',
+  appName: "Plataforma de Agentes IA",
   pilotModeBanner:
-    'Modo piloto activo: las acciones sensibles requieren aprobación humana.',
+    "Modo piloto activo: las acciones sensibles requieren aprobación humana.",
   nav: {
-    resumen: 'Resumen',
-    aprobaciones: 'Aprobaciones',
-    catalogo: 'Productos',
-    documentos: 'Documentos',
-    agentes: 'Agentes de IA',
-    automatizaciones: 'Automatizaciones',
-    usuarios: 'Usuarios y permisos',
+    resumen: "Resumen",
+    aprobaciones: "Aprobaciones",
+    catalogo: "Productos",
+    documentos: "Documentos",
+    agentes: "Agentes de IA",
+    clientes: "Clientes",
+    automatizaciones: "Automatizaciones",
+    usuarios: "Usuarios y permisos",
   },
   status: {
-    configured: 'Configurado',
-    pending: 'Pendiente de configuración',
-    loading: 'Cargando…',
+    configured: "Configurado",
+    pending: "Pendiente de configuración",
+    loading: "Cargando…",
   },
 };
 

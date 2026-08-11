@@ -541,6 +541,10 @@ def _seed_resilience_product(api: IsolatedApi) -> None:
 
 
 def _configure_ghl(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Hermeticidad D-032: la URL es falsa; el adaptador nunca hace red
+    # (sus métodos están sustituidos). Sin ella el adaptador no está
+    # configurado y el flujo cae a ``not_configured`` en vez de encolar.
+    monkeypatch.setattr(bridge_main.ghl_adapter, "base_url", "https://ghl-fake.invalid")
     monkeypatch.setattr(bridge_main.ghl_adapter, "token", "fault-injection-token")
     monkeypatch.setattr(bridge_main.ghl_adapter, "location_id", "fault-injection-location")
 

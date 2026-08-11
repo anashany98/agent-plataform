@@ -5,7 +5,6 @@ Author: ZCode (autonomous remediation workflow)
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -17,7 +16,6 @@ from reportlab.lib.units import cm, mm
 from reportlab.platypus import (
     BaseDocTemplate,
     Frame,
-    KeepTogether,
     NextPageTemplate,
     PageBreak,
     PageTemplate,

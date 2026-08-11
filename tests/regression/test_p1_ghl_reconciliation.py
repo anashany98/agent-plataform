@@ -235,6 +235,10 @@ def _install_provider(monkeypatch: pytest.MonkeyPatch) -> FakeGHLProvider:
     """Conecta el doble de estado al adapter del bridge y lo configura."""
 
     provider = FakeGHLProvider()
+    # Hermeticidad D-032: la URL es falsa; el adaptador nunca hace red
+    # (todos sus métodos están sustituidos por el doble). Sin ella el
+    # adaptador no está configurado y el flujo cae a ``not_configured``.
+    monkeypatch.setattr(bridge_main.ghl_adapter, "base_url", "https://ghl-fake.invalid")
     monkeypatch.setattr(bridge_main.ghl_adapter, "token", "fault-injection-token")
     monkeypatch.setattr(bridge_main.ghl_adapter, "location_id", "fault-injection-location")
     for method in ("upsert_contact", "create_opportunity", "find_opportunity_by_reference", "add_note", "find_note_by_body"):

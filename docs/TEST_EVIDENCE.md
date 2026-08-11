@@ -1,5 +1,40 @@
 # Evidencia de pruebas de producción
 
+## Auditoría del árbol — 2026-08-10, HEAD `c5c0b52` (histórico)
+
+| Control | Resultado | Interpretación |
+|---|---|---|
+| `bridge-api/tests/unit` | 23 passed | Unitarios Bridge verdes |
+| `tests/integration` | 2 failed, 30 passed, 3 skipped | Fallan catálogo local sin PrestaShop e idempotencia del webhook |
+| Regresión parcial (sin dependency/quality/backup) | 8 failed, 187 passed, 6 skipped | Los ocho fallos son migraciones por `0006` sin seguimiento |
+| Replay HMAC aislado | 1 failed | Primer POST 200; duplicado idéntico 202 `processing` |
+| Suite completa | timeout 124,1 s, sin resultado | No declarar corpus verde |
+| `scripts/quality_gates.py` | FAIL | 5 ruff-hard; 6 clean-zone; deuda 242 > baseline 213 |
+
+## Reevaluación post-remediación — 2026-08-10, HEAD `09b854b` + working tree
+
+Remediación previa: `5677662` cierra RA-01…RA-08 (1 P0 + 7 P1) con evals de regresión; `a540223`/`09b854b` corrigen `search_products()` de PrestaShop (15/15 escenarios live verdes contra la tienda real); el working tree añade hermeticidad total D-032 (neutraliza `PRESTASHOP_*`/`GHL_*` del `.env` del operador), actualiza los 4 tests de catálogo al comportamiento RA-04 (fuente agnóstica), deja los quality gates verdes y restaura el estado global en los tests que mutaban `SessionLocal` (la suite de regresión completa corre verde en un solo proceso).
+
+| Control | Resultado | Interpretación |
+|---|---|---|
+| `bridge-api/tests/unit` | 23 passed | Unitarios Bridge verdes |
+| `tests/integration` | 35 passed | Corpus completo verde; incluye los 4 evals de catálogo actualizados a RA-04 (`catalog_full_list`, fuentes `prestashop`/`local`/`import`) y el replay del webhook |
+| Migraciones (`test_p0_migrations.py`) | 24 passed | `0006` dialect-aware (RA-02): pgvector/Vector en PostgreSQL, no-op en SQLite; clean/upgrade/downgrade verdes |
+| Evals RA-01…RA-08 (`test_audit_remediation_2026_08_10.py`) | 5 passed | `restore_to_url` sin `drop_all` (marker obligatorio), replay HMAC 200 cacheado, catálogo local sin PrestaShop, `_LOG`→`log_event`, Chatwoot SSRF off por defecto, email/webhook fail-closed |
+| Regresión completa | 222 passed, 9 skipped | Antes (auditoría): 8 failed; antes (working tree previo): 6 failed + 21 errors por envenenamiento de `SessionLocal` — resuelto. Los 9 skips son opt-in/live: 4 E2E Docker con catálogo live, 2 `test_prestashop_webservice_search` (requieren credenciales reales), 2 preflight bash/Windows y 1 backup PostgreSQL opt-in (`RUN_POSTGRES_BACKUP=1`) |
+| `scripts/quality_gates.py` | PASS | ruff-hard 0 · ruff-clean-zone 0 · ruff-ratchet 243 = baseline 243; baseline reconciliado (desglose `by_rule` suma 243: UP006 166, UP007 48, UP035 19, B033 6, UP017 2, I001 2) |
+| Hermeticidad D-032 | VERIFIED (working tree) | `tests/conftest.py` neutraliza credenciales PrestaShop/GHL reales; la suite ya no toca red ni hereda entorno (antes `test_commerce.py` >600 s contra la tienda real; ahora 0,6 s) |
+| Backup integral con CRM local (Fase B bloque 5) | 3 evals passed | `leads`/`opportunities` entran en el manifiesto (conteos + sha256); roundtrip a instalación vacía restaura lead+oportunidad con la FK lead→oportunidad y las notas intactas (`test_p1_backup_restore.py`); el rollback de datos recupera el CRM local borrado |
+| RTO/RPO medidos (Fase B bloque 5) | RTO 0,197 s (SQLite, 5 filas) | Metodología: **RPO** = cadencia programada del backup (parámetro operacional, p. ej. cron diario → RPO ≤ 24 h; lo fija el scheduler que invoca `scripts/backup-restore-integral.sh`); **RTO** = tiempo del restore hasta datos consultables, medido por el eval `test_restore_rto_is_measured_and_bounded` con límite de 10 s; PostgreSQL opt-in (`RUN_POSTGRES_BACKUP=1`) pendiente de runtime |
+| Portal typecheck/test/build | PASS / 5 passed / PASS | Compila; tests usan fetch mockeado |
+| Portal format/ESLint | FAIL / FAIL | 7 fuentes sin formato; falta `eslint.config.*` (preexistente, sin cambios) |
+| npm audit producción/completo | 0 / 1 HIGH | Runtime limpio; build/CI afectado por nanoid transitivo (preexistente) |
+| Compose core/full | config estática PASS | No acredita runtime |
+| Compose prod example | FAIL standalone | Proxy sin image/build; TLS no implementado (preexistente) |
+| Docker/runtime/E2E | BLOCKED | daemon detenido; ~2,8 GiB de RAM libre (B-010) |
+
+Esta sección prevalece sobre la tabla de auditoría y los resultados verdes históricos para evaluar el árbol actual. La tabla de auditoría se conserva como trazabilidad del estado que motivó RA-01…RA-08. Los resultados anteriores se conservan como trazabilidad de commits previos.
+
 ## Regla de evidencia
 
 Una prueba solo se marca `VERIFIED` si es reproducible, comprueba efectos reales y no sustituye el componente objetivo por mocks. Build, arranque, health e integración son niveles distintos.

@@ -22,7 +22,6 @@ from decimal import Decimal
 import pytest
 from app.config import settings
 from app.database import SessionLocal
-from app.main import app
 from app.models.models import Product
 from fastapi.testclient import TestClient
 

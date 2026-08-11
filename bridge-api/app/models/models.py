@@ -278,6 +278,92 @@ class Customer(InstallationOwnedMixin, Base):
         return bool(self.tax_exempt)
 
 
+class Lead(InstallationOwnedMixin, Base):
+    """Lead capturado localmente (Fase B, LocalCRMProvider).
+
+    Es el equivalente local del contacto de GHL: sin proveedor externo
+    configurado, el core persiste el lead en esta tabla con la misma
+    semántica de idempotencia por ``external_reference`` que la
+    reconciliación D-010 (nunca se crea un efecto dos veces).
+    """
+
+    __tablename__ = "leads"
+    __table_args__ = (
+        UniqueConstraint(
+            "installation_id",
+            "email",
+            name="uq_lead_installation_email",
+        ),
+        UniqueConstraint(
+            "installation_id",
+            "external_reference",
+            name="uq_lead_installation_external_reference",
+        ),
+        UniqueConstraint(
+            "installation_id",
+            "id",
+            name="uq_lead_installation_id",
+        ),
+    )
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    # Referencia externa del lead (p. ej. id del presupuesto). Opcional:
+    # el contacto local puede existir sin oportunidad; la unicidad aplica
+    # solo cuando hay referencia.
+    external_reference = Column(String, index=True, nullable=True)
+    email = Column(String, index=True, nullable=False)
+    first_name = Column(String, nullable=False)
+    phone = Column(String, nullable=True)
+    company_name = Column(String, nullable=True)
+    source = Column(String, default="local", nullable=False)
+    status = Column(String, default="new", nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
+class Opportunity(InstallationOwnedMixin, Base):
+    """Oportunidad comercial local (Fase B, LocalCRMProvider).
+
+    Equivalente local de la oportunidad de GHL, con pipeline/etapa,
+    valor monetario y notas. La unicidad por ``external_reference``
+    (p. ej. el id del presupuesto) hace la creación idempotente.
+    """
+
+    __tablename__ = "opportunities"
+    __table_args__ = (
+        UniqueConstraint(
+            "installation_id",
+            "external_reference",
+            name="uq_opportunity_installation_external_reference",
+        ),
+        UniqueConstraint(
+            "installation_id",
+            "id",
+            name="uq_opportunity_installation_id",
+        ),
+        ForeignKeyConstraint(
+            ["installation_id", "lead_id"],
+            ["leads.installation_id", "leads.id"],
+            name="fk_opportunity_installation_lead",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+    )
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    lead_id = Column(String, nullable=False)
+    external_reference = Column(String, index=True, nullable=False)
+    name = Column(String, nullable=False)
+    monetary_value = Column(Numeric(14, 4), default=0, nullable=False)
+    currency = Column(String, default="EUR", nullable=False)
+    pipeline = Column(String, default="default", nullable=False)
+    stage = Column(String, default="new", nullable=False)
+    status = Column(String, default="open", nullable=False)
+    notes = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class Product(InstallationOwnedMixin, Base):
     __tablename__ = "products"
     __table_args__ = (

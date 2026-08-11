@@ -70,6 +70,14 @@ class Settings(BaseSettings):
     ADVANCED_LLM_MODEL: str = os.getenv("ADVANCED_LLM_MODEL", "")
     CRITICAL_LLM_PROVIDER: str = os.getenv("CRITICAL_LLM_PROVIDER", "anthropic")
     CRITICAL_LLM_MODEL: str = os.getenv("CRITICAL_LLM_MODEL", "")
+    # Fase B (T-022): proveedor de catálogo activo y fuente configurable.
+    # "auto" = PrestaShop si está configurado, si no LocalCatalogProvider
+    # (catálogo local de confianza: local/import). Valores: auto|local|prestashop.
+    CATALOG_PROVIDER: str = os.getenv("CATALOG_PROVIDER", "auto")
+    # Fase B (bloque 1): proveedor CRM activo. "auto" = GHL si está
+    # configurado, si no LocalCRMProvider (leads/oportunidades en BD local).
+    # Valores: auto|local|ghl.
+    CRM_PROVIDER: str = os.getenv("CRM_PROVIDER", "auto")
     # Número máximo de productos que el chat lista en una respuesta.
     # El cliente exige ver TODOS los productos PrestaShop cuando
     # pregunta por el catálogo, así que el default es 500 (cubre el

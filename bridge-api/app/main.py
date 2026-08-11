@@ -27,6 +27,8 @@ from app.models.models import (
     Customer,
     IdempotencyRecord,
     InvoiceDraft,
+    Lead,
+    Opportunity,
     Order,
     OutboxMessage,
     Pricelist,
@@ -50,7 +52,9 @@ from app.security import (
 )
 from app.seed import seed_database
 from app.services.activepieces_adapter import ActivepiecesAdapter, ActivepiecesIntegrationError
+from app.services.catalog_provider import active_catalog_provider
 from app.services.chatwoot_adapter import ChatwootAdapter, ChatwootIntegrationError
+from app.services.crm_provider import LocalCRMProvider, active_crm_provider
 from app.services.deterministic_tools import BusinessRuleError, DeterministicToolsService, InsufficientStockError
 from app.services.ghl_adapter import GHLAdapter, GHLIntegrationError
 from app.services.import_service import ImportService, ImportValidationError, parse_import_file
@@ -201,6 +205,13 @@ class UserUpdateRequest(BaseModel):
     role: Optional[str] = None
     is_active: Optional[bool] = None
     reset_password: Optional[str] = Field(default=None, min_length=12, max_length=256)
+
+
+class LeadCreateRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    first_name: str = Field(min_length=1, max_length=255)
+    phone: str | None = Field(default=None, max_length=64)
+    company_name: str | None = Field(default=None, max_length=255)
 
 
 class AgentRunRequest(BaseModel):
@@ -886,7 +897,7 @@ async def _handle_product_comparison(db: Session, *, content: str, limit: int):
     found: List[Dict[str, Any]] = []
     seen_ids: set[str] = set()
     for name in product_names:
-        results = tools.search_products(name, limit=2, source=_default_catalog_source())
+        results = tools.search_products(name, limit=2, sources=active_catalog_provider(db).sources)
         for r in results:
             if r["id"] in seen_ids:
                 continue
@@ -924,7 +935,7 @@ async def _build_catalog_categories_summary(db: Session, *, tools, limit: int) -
     ejemplo representativo por cada una. NO lista los productos uno a
     uno: el chat debe redirigir a la web.
     """
-    products = tools.search_products("", limit=10_000, source=_default_catalog_source())
+    products = tools.search_products("", limit=10_000, sources=active_catalog_provider(db).sources)
     by_category: Dict[str, List[Dict[str, Any]]] = {}
     for product in products:
         category = (product.get("category") or "Otros").strip() or "Otros"
@@ -947,7 +958,7 @@ async def _build_catalog_categories_summary(db: Session, *, tools, limit: int) -
 
 def _build_categories_brief(db: Session, *, tools, limit: int) -> Dict[str, Any]:
     """Resumen ligero de categorías para el modo 'browse prompt'."""
-    products = tools.search_products("", limit=10_000, source=_default_catalog_source())
+    products = tools.search_products("", limit=10_000, sources=active_catalog_provider(db).sources)
     by_category: Dict[str, int] = {}
     for product in products:
         category = (product.get("category") or "Otros").strip() or "Otros"
@@ -1031,9 +1042,11 @@ def _default_catalog_source() -> Optional[str]:
       manual). Esto garantiza que el core funcione sin PrestaShop, alineado
       con el requisito de operación independiente.
 
-    El helper es el ÚNICO punto del módulo que decide la fuente por
-    defecto; todas las llamadas del chat deben usarlo en lugar de
-    hardcodear ``source="prestashop"``.
+    Fase B (T-022): el punto canónico de decisión ahora es
+    ``active_catalog_provider`` (``LocalCatalogProvider`` por defecto,
+    fuente configurable vía ``CATALOG_PROVIDER``). Este helper se mantiene
+    para compatibilidad y para los flujos que sólo necesitan saber si la
+    fuente activa es PrestaShop; el chat usa el proveedor activo.
     """
 
     try:
@@ -1328,9 +1341,11 @@ async def _dispatch_ghl_lead_capture(message: OutboxMessage) -> Dict[str, Any]:
     contact_id = str(checkpoint.get("contact_id") or "")
     reconciled: list = list(checkpoint.get("reconciled") or [])
     external_id = str(payload.get("external_id") or "").strip()
+    provider = active_crm_provider(db)
+    provider_kind = "local" if isinstance(provider, LocalCRMProvider) else "ghl"
     try:
-        if not ghl_adapter.configured():
-            raise OutboxPermanentError("GHL no está configurado")
+        if not provider.configured():
+            raise OutboxPermanentError("Ningún proveedor CRM está configurado")
         email = str(payload.get("email") or "").strip()
         if not email or email.endswith("@invalid.local"):
             raise OutboxPermanentError("El lead no tiene datos de contacto válidos")
@@ -1339,7 +1354,7 @@ async def _dispatch_ghl_lead_capture(message: OutboxMessage) -> Dict[str, Any]:
                 "El lead no tiene referencia externa y no puede reconciliarse"
             )
         if not contact_id:
-            contact_response = await ghl_adapter.upsert_contact(
+            contact_response = await provider.upsert_contact(
                 email=email,
                 first_name=str(payload.get("first_name") or ""),
                 phone=payload.get("phone"),
@@ -1348,19 +1363,19 @@ async def _dispatch_ghl_lead_capture(message: OutboxMessage) -> Dict[str, Any]:
             contact = contact_response.get("contact") or contact_response
             contact_id = str(contact.get("id") or "")
             if not contact_id:
-                raise GHLIntegrationError("GHL no devolvió un ID de contacto")
+                raise GHLIntegrationError("El proveedor CRM no devolvió un ID de contacto")
             checkpoint = _commit_ghl_checkpoint(
                 message, payload, {**checkpoint, "contact_id": contact_id}
             )
         if not checkpoint.get("opportunity"):
-            existing = await ghl_adapter.find_opportunity_by_reference(
+            existing = await provider.find_opportunity_by_reference(
                 contact_id=contact_id, external_id=external_id
             )
             if existing is not None:
                 opportunity = existing
                 reconciled.append("opportunity")
             else:
-                opportunity = await ghl_adapter.create_opportunity(
+                opportunity = await provider.create_opportunity(
                     contact_id=contact_id,
                     name=str(payload.get("opportunity_name") or ""),
                     monetary_value=float(payload.get("monetary_value") or 0.0),
@@ -1373,9 +1388,9 @@ async def _dispatch_ghl_lead_capture(message: OutboxMessage) -> Dict[str, Any]:
             )
         note_body = str(payload.get("note") or "")
         if note_body and not checkpoint.get("note_completed"):
-            existing_note = await ghl_adapter.find_note_by_body(contact_id, note_body)
+            existing_note = await provider.find_note_by_body(contact_id, note_body)
             if existing_note is None:
-                await ghl_adapter.add_note(contact_id, note_body)
+                await provider.add_note(contact_id, note_body)
             else:
                 reconciled.append("note")
             checkpoint = _commit_ghl_checkpoint(
@@ -1390,13 +1405,14 @@ async def _dispatch_ghl_lead_capture(message: OutboxMessage) -> Dict[str, Any]:
     if reconciled:
         _audit(
             db,
-            event_type="ghl_lead_reconciled",
+            event_type=f"{provider_kind}_lead_reconciled",
             status_value="success",
             details={
                 "outbox_id": message.id,
                 "external_id": external_id,
                 "contact_id": contact_id,
                 "reconciled": list(reconciled),
+                "provider": provider_kind,
             },
         )
     return {
@@ -1413,7 +1429,8 @@ OUTBOX_DISPATCHERS: Dict[str, Any] = {
 
 
 async def _capture_ghl_opportunity(db: Session, customer: Customer, quote: Dict[str, Any]) -> Dict[str, Any]:
-    if not ghl_adapter.configured():
+    provider = active_crm_provider(db)
+    if not provider.configured():
         return {"status": "not_configured"}
     if customer.email.endswith("@invalid.local"):
         return {"status": "missing_contact_data"}
@@ -1456,7 +1473,9 @@ async def _capture_ghl_opportunity(db: Session, customer: Customer, quote: Dict[
         return result
     _audit(
         db,
-        event_type="ghl_lead",
+        event_type=(
+            "local_lead" if isinstance(provider, LocalCRMProvider) else "ghl_lead"
+        ),
         status_value="queued_for_retry",
         details={
             "quote_id": quote["quote_id"],
@@ -1762,9 +1781,9 @@ async def receive_chatwoot_webhook(
                 # Fuente dinámica: prestashop cuando está configurado,
                 # todos los productos visibles del catálogo local en otro
                 # caso. El core sigue funcionando sin PrestaShop.
-                catalog_source = _default_catalog_source()
+                catalog_sources = active_catalog_provider(db).sources
                 verified_products = tools.search_products(
-                    "", limit=overview_limit, source=catalog_source
+                    "", limit=overview_limit, sources=catalog_sources
                 )
                 action_label = "catalog_browse_prompt"
                 _trigger_fallback_to_else = False
@@ -1874,7 +1893,7 @@ async def receive_chatwoot_webhook(
             # ----------------------------------------------------------------
             if full_catalog_request:
                 verified_products = tools.search_products(
-                    "", limit=overview_limit, source=_default_catalog_source()
+                    "", limit=overview_limit, sources=active_catalog_provider(db).sources
                 )
                 if verified_products:
                     # LLM genera la respuesta en lenguaje natural con
@@ -1946,7 +1965,7 @@ async def receive_chatwoot_webhook(
                 scoped_products = tools.search_products(
                     _humanize_category(domain_hint),
                     limit=overview_limit,
-                    source=_default_catalog_source(),
+                    sources=active_catalog_provider(db).sources,
                 )
 
             specific_products: List[Dict[str, Any]] = []
@@ -1955,7 +1974,7 @@ async def receive_chatwoot_webhook(
                 # (catálogo real de la tienda). Las recomendaciones
                 # puntuales también filtran por source='prestashop'.
                 specific_products = tools.search_products(
-                    content, limit=overview_limit, source=_default_catalog_source()
+                    content, limit=overview_limit, sources=active_catalog_provider(db).sources
                 )
 
             if scoped_products:
@@ -1970,7 +1989,7 @@ async def receive_chatwoot_webhook(
                 # cliente ha hecho una pregunta de catálogo y la
                 # respuesta debe incluir el catálogo real completo.
                 verified_products = tools.search_products(
-                    "", limit=overview_limit, source=_default_catalog_source()
+                    "", limit=overview_limit, sources=active_catalog_provider(db).sources
                 )
                 if not verified_products:
                     reply = (
@@ -2767,6 +2786,173 @@ def get_provider_dashboard(_: Principal = Depends(require_roles("provider_admin"
             "pending_approvals": db.query(ApprovalRequest).filter(ApprovalRequest.status == "pending").count(),
         },
     }
+
+
+@app.get("/dashboard", tags=["Operación"])
+def get_role_aware_dashboard(
+    principal: Principal = Depends(require_roles(*READ_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Resumen operativo adaptado al rol (T-024 / Fase B bloque 4).
+
+    El portal carga este endpoint para cualquier rol lector y deriva de
+    ``permissions`` qué secciones y acciones mostrar: el backend es la
+    autoridad de RBAC y el frontend nunca decide permisos por su cuenta.
+    Los conteos sensibles (aprobaciones pendientes) solo se exponen a
+    roles operadores; ``viewer`` recibe el resumen básico sin filtración
+    de datos ajenos.
+    """
+
+    counts = {
+        "products": db.query(Product).count(),
+        "customers": db.query(Customer).count(),
+        "quotes": db.query(Quote).count(),
+        "orders": db.query(Order).count(),
+    }
+    if principal.role in OPERATOR_ROLES:
+        counts["pending_approvals"] = (
+            db.query(ApprovalRequest)
+            .filter(ApprovalRequest.status == "pending")
+            .count()
+        )
+    return {
+        "installation_id": settings.INSTALLATION_ID,
+        "installed_version": app.version,
+        "pilot_mode": settings.PILOT_MODE,
+        "role": principal.role,
+        "permissions": {
+            "approve": principal.role in OPERATOR_ROLES,
+            "manage_leads": principal.role in OPERATOR_ROLES,
+            "manage_users": principal.role in ADMIN_ROLES,
+            "view_costs": principal.role in ADMIN_ROLES,
+            "import_catalog": principal.role in ADMIN_ROLES,
+        },
+        "integrations": {
+            "prestashop": "configured" if prestashop_adapter.configured() else "not_configured",
+            "ghl": "configured" if ghl_adapter.configured() else "not_configured",
+            "chatwoot": "configured" if settings.CHATWOOT_API_TOKEN else "not_configured",
+            "activepieces": "configured" if settings.ACTIVEPIECES_BASE_URL else "not_configured",
+        },
+        "counts": counts,
+    }
+
+
+@app.get("/leads", tags=["CRM local"])
+def list_leads(
+    _: Principal = Depends(require_roles(*OPERATOR_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Lista leads locales (LocalCRMProvider) con sus oportunidades (Fase B)."""
+
+    leads = db.query(Lead).order_by(Lead.created_at.desc()).limit(500).all()
+    result = []
+    for lead in leads:
+        opportunities = (
+            db.query(Opportunity)
+            .filter(Opportunity.lead_id == lead.id)
+            .order_by(Opportunity.created_at.desc())
+            .all()
+        )
+        result.append(
+            {
+                "id": lead.id,
+                "email": lead.email,
+                "first_name": lead.first_name,
+                "phone": lead.phone,
+                "company_name": lead.company_name,
+                "source": lead.source,
+                "status": lead.status,
+                "created_at": lead.created_at.isoformat() if lead.created_at else None,
+                "opportunities": [
+                    {
+                        "id": opp.id,
+                        "name": opp.name,
+                        "stage": opp.stage,
+                        "status": opp.status,
+                        "monetary_value": float(opp.monetary_value or 0),
+                        "currency": opp.currency,
+                        "external_reference": opp.external_reference,
+                        "notes_count": len(opp.notes or []),
+                        "created_at": (
+                            opp.created_at.isoformat() if opp.created_at else None
+                        ),
+                    }
+                    for opp in opportunities
+                ],
+            }
+        )
+    return result
+
+
+@app.post("/leads", tags=["CRM local"])
+def create_lead(
+    req: LeadCreateRequest,
+    _: Principal = Depends(require_roles(*OPERATOR_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Crea un lead local (alta manual del alcance comercial mínimo)."""
+
+    email = req.email.strip().lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        raise HTTPException(status_code=422, detail="Email inválido")
+    if db.query(Lead).filter(Lead.email == email).first():
+        raise HTTPException(status_code=409, detail="Ya existe un lead con ese email")
+    lead = Lead(
+        email=email,
+        first_name=req.first_name.strip(),
+        phone=req.phone,
+        company_name=req.company_name,
+        source="local",
+        status="new",
+    )
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+    return {
+        "id": lead.id,
+        "email": lead.email,
+        "first_name": lead.first_name,
+        "phone": lead.phone,
+        "company_name": lead.company_name,
+        "source": lead.source,
+        "status": lead.status,
+        "created_at": lead.created_at.isoformat() if lead.created_at else None,
+    }
+
+
+@app.get("/opportunities", tags=["CRM local"])
+def list_opportunities(
+    _: Principal = Depends(require_roles(*OPERATOR_ROLES)),
+    db: Session = Depends(get_db),
+):
+    """Lista oportunidades locales con el email del lead (Fase B)."""
+
+    rows = db.query(Opportunity).order_by(Opportunity.created_at.desc()).limit(500).all()
+    lead_ids = {row.lead_id for row in rows}
+    leads_by_id = {}
+    if lead_ids:
+        leads_by_id = {
+            lead.id: lead
+            for lead in db.query(Lead).filter(Lead.id.in_(lead_ids)).all()
+        }
+    return [
+        {
+            "id": row.id,
+            "lead_id": row.lead_id,
+            "lead_email": (
+                leads_by_id[row.lead_id].email if row.lead_id in leads_by_id else None
+            ),
+            "name": row.name,
+            "stage": row.stage,
+            "status": row.status,
+            "monetary_value": float(row.monetary_value or 0),
+            "currency": row.currency,
+            "external_reference": row.external_reference,
+            "notes_count": len(row.notes or []),
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+        for row in rows
+    ]
 
 
 @app.post("/api/bridge/import/{entity_type}", tags=["Importación"])

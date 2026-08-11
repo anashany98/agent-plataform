@@ -19,6 +19,18 @@ os.environ.update(
         'CHATWOOT_WEBHOOK_SECRET': 'test-chatwoot-secret',
         'CHATWOOT_API_TOKEN': '',
         'CHATWOOT_HANDOFF_TEAM_ID': '1',
+        # Hermeticidad D-032: los tests nunca deben heredar credenciales
+        # reales del .env del operador. Con estas claves vacías los
+        # adaptadores caen a su estado no configurado y el chat usa el
+        # catálogo local (RA-04) sin tocar la red.
+        'PRESTASHOP_BASE_URL': '',
+        'PRESTASHOP_API_KEY': '',
+        'PRESTASHOP_SHOP_ID': '',
+        'GHL_BASE_URL': '',
+        'GHL_API_TOKEN': '',
+        'GHL_LOCATION_ID': '',
+        'GHL_PIPELINE_ID': '',
+        'GHL_PIPELINE_STAGE_ID': '',
         'ALLOW_INTEGRATION_STUBS': 'true',
         'ALLOW_MOCK_LLM': 'true',
         'STANDARD_LLM_PROVIDER': 'mock',

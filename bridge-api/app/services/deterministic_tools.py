@@ -6,6 +6,7 @@ import re
 import secrets
 import unicodedata
 import uuid
+from collections.abc import Iterable
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional
 
@@ -137,6 +138,7 @@ class DeterministicToolsService:
         *,
         include_demo: bool = False,
         source: Optional[str] = None,
+        sources: Iterable[str] | None = None,
     ) -> List[Dict[str, Any]]:
         """Busca productos verificados del catálogo local.
 
@@ -152,6 +154,10 @@ class DeterministicToolsService:
                 respuestas de catálogo en el chat expongan sólo lo
                 realmente disponible en la tienda y excluyan productos
                 sintéticos locales o importados de pruebas internas.
+            sources: Alternativa a ``source`` para que un proveedor de
+                catálogo exponga varios orígenes a la vez (p. ej.
+                ``LocalCatalogProvider`` sirve ``local``/``import``). Si
+                se pasa, filtra ``Product.source IN sources``.
         """
         safe_limit = max(1, min(limit, 10_000))
         product_query = self.db.query(Product)
@@ -160,6 +166,17 @@ class DeterministicToolsService:
         if source:
             normalized_source = func.lower(func.trim(Product.source))
             product_query = product_query.filter(normalized_source == str(source).strip().lower())
+        if sources:
+            normalized_sources = {
+                str(value).strip().lower()
+                for value in sources
+                if str(value or "").strip()
+            }
+            if normalized_sources:
+                normalized_source = func.lower(func.trim(Product.source))
+                product_query = product_query.filter(
+                    normalized_source.in_(sorted(normalized_sources))
+                )
         if not query.strip():
             products = product_query.order_by(Product.name.asc()).limit(5_000).all()
             visible_products = [

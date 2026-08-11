@@ -36,9 +36,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.database import Base
 
-# Coincide con la revisión de migración más reciente (0005). Si el esquema
+# Coincide con la revisión de migración más reciente (0007). Si el esquema
 # cambia, bump de esta constante para invalidar restores incompatibles.
-SCHEMA_VERSION = "0005"
+SCHEMA_VERSION = "0007"
 SCHEMA_VERSION_KEY = "schema_version"
 
 # Tabla efímera usada como marker de "destino preparado para restore".

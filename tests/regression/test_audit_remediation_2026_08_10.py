@@ -24,6 +24,7 @@ import hashlib
 import hmac
 import json
 import time
+from contextlib import contextmanager
 from decimal import Decimal
 
 import pytest
@@ -162,11 +163,18 @@ def _sign_webhook(raw_body: bytes, secret: str = CHATWOOT_WEBHOOK_SECRET) -> dic
     }
 
 
+@contextmanager
 def _build_engine_and_client(tmp_path):
     """Construye engine SQLite en archivo, override de ``get_db`` y TestClient.
 
     Usa SQLite en archivo (no ``:memory:``) para que los datos sobrevivan
     entre sesiones distintas y para evitar problemas de path en Windows.
+
+    Es un context manager porque muta estado global (``SessionLocal``,
+    ``app.database.engine`` y los dependency overrides de la app); al salir
+    restaura todo en ``finally`` para no envenenar el resto de la suite
+    (sin esto, la BD compartida queda apuntando a un SQLite temporal ya
+    cerrado y el login de la fixture ``token`` devuelve 401 en masa).
     """
     db_path = tmp_path / "audit_test.db"
     db_url = f"sqlite+pysqlite:///{db_path.as_posix()}"
@@ -186,8 +194,13 @@ def _build_engine_and_client(tmp_path):
     from app.main import app
     from app.security import Principal, get_current_principal
 
-    app.dependency_overrides.pop(get_db, None)
-    app.dependency_overrides.pop(get_current_principal, None)
+    # Guardamos el estado global previo para restaurarlo al salir.
+    previous_bind = SessionLocal.kw.get("bind")
+    import app.database as _db_module
+    previous_module_engine = _db_module.engine
+    previous_db_override = app.dependency_overrides.get(get_db)
+    previous_principal_override = app.dependency_overrides.get(get_current_principal)
+
     app.dependency_overrides[get_db] = isolated_db
 
     # CRITICAL: también parcheamos ``SessionLocal`` y ``engine`` del módulo
@@ -197,7 +210,6 @@ def _build_engine_and_client(tmp_path):
     SessionLocal.configure(bind=engine)
     # Reemplazamos el atributo ``engine`` del módulo con una referencia al
     # nuestro para que cualquier ``app.database.engine`` apunte aquí.
-    import app.database as _db_module
     _db_module.engine = engine
     Base.metadata.create_all(bind=engine)
 
@@ -211,7 +223,24 @@ def _build_engine_and_client(tmp_path):
     )
     app.dependency_overrides[get_current_principal] = lambda: principal
 
-    return engine, session_factory, TestClient(app, raise_server_exceptions=False)
+    client = TestClient(app, raise_server_exceptions=False)
+    try:
+        yield engine, session_factory, client
+    finally:
+        client.close()
+        engine.dispose()
+        # Restauramos el estado global (Hermeticidad D-032: un test no
+        # puede dejar la suite compartida apuntando a su BD temporal).
+        SessionLocal.configure(bind=previous_bind)
+        _db_module.engine = previous_module_engine
+        if previous_db_override is None:
+            app.dependency_overrides.pop(get_db, None)
+        else:
+            app.dependency_overrides[get_db] = previous_db_override
+        if previous_principal_override is None:
+            app.dependency_overrides.pop(get_current_principal, None)
+        else:
+            app.dependency_overrides[get_current_principal] = previous_principal_override
 
 
 def test_webhook_replay_returns_cached_result_not_processing(tmp_path) -> None:
@@ -223,8 +252,7 @@ def test_webhook_replay_returns_cached_result_not_processing(tmp_path) -> None:
     que el replay veía ``processing`` y devolvía 202.
     """
 
-    engine, session_factory, client = _build_engine_and_client(tmp_path)
-    try:
+    with _build_engine_and_client(tmp_path) as (engine, session_factory, client):
         body = {
             "event": "message_created",
             "id": 4242,
@@ -312,9 +340,6 @@ def test_webhook_replay_returns_cached_result_not_processing(tmp_path) -> None:
                 f"'{record.state}'. El handler debe transicionar a "
                 f"completed al cerrar la rama de éxito."
             )
-    finally:
-        client.close()
-        engine.dispose()
 
 
 # ---------------------------------------------------------------------------

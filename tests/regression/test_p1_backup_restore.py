@@ -15,13 +15,14 @@ real sobre el motor de producción sin romper el harness.
 from __future__ import annotations
 
 import os
+import time
 from decimal import Decimal
 from typing import Any
 
 import pytest
 from app.database import Base
 from app.installation_context import installation_scope
-from app.models.models import Customer, Product, Quote
+from app.models.models import Customer, Lead, Opportunity, Product, Quote
 from app.services import backup
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -67,6 +68,40 @@ def _seed(engine) -> None:
                     grand_total=Decimal("93.17"),
                     currency="EUR",
                     status="draft",
+                )
+            )
+            db.commit()
+
+
+def _seed_crm(engine) -> None:
+    """Siembra un lead con su oportunidad (Fase B bloque 5)."""
+
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+    with installation_scope(INSTALLATION):
+        with factory() as db:
+            lead = Lead(
+                id="lead-backup",
+                email="lead-backup@example.invalid",
+                first_name="Lead Backup",
+                phone="+34600111222",
+                company_name="Backup Corp",
+                source="local",
+                status="new",
+            )
+            db.add(lead)
+            db.flush()
+            db.add(
+                Opportunity(
+                    id="opp-backup",
+                    lead_id=lead.id,
+                    external_reference="quote-backup",
+                    name="Presupuesto Backup",
+                    monetary_value=Decimal("136.00"),
+                    currency="EUR",
+                    pipeline="default",
+                    stage="new",
+                    status="open",
+                    notes=[{"body": "nota", "created_at": "2026-08-10T00:00:00"}],
                 )
             )
             db.commit()
@@ -170,6 +205,151 @@ def test_rollback_installation_restores_known_state() -> None:
             verification = backup.verify_backup(db, manifest, installation_id=INSTALLATION)
         assert verification["ok"] is True
     engine.dispose()
+
+
+def test_backup_integral_includes_crm_tables_roundtrip(tmp_path) -> None:
+    """Fase B bloque 5: el backup integral cubre leads y oportunidades.
+
+    Las tablas ``leads``/``opportunities`` entran en el manifiesto porque
+    viven en ``Base.metadata``; este eval lo fija como contrato: si mañana
+    el backup dejara de incluirlas, el restore perdería el CRM local.
+    """
+    source_path = tmp_path / "src-crm.db"
+    target_path = tmp_path / "tgt-crm.db"
+    source = create_engine(f"sqlite+pysqlite:///{source_path.as_posix()}")
+    Base.metadata.create_all(source)
+    _seed_crm(source)
+
+    factory = sessionmaker(bind=source)
+    with installation_scope(INSTALLATION):
+        with factory() as db:
+            manifest = backup.create_backup(db, installation_id=INSTALLATION)
+
+    assert "leads" in manifest["tables"], (
+        "El backup integral debe incluir la tabla de leads"
+    )
+    assert "opportunities" in manifest["tables"]
+    assert manifest["tables"]["leads"]["count"] == 1
+    assert manifest["tables"]["opportunities"]["count"] == 1
+
+    # Restore a instalación vacía (base nueva con marker) y verificación.
+    target_url = f"sqlite+pysqlite:///{target_path.as_posix()}"
+    backup.prepare_restore_target(target_url)
+    target = create_engine(target_url)
+    with installation_scope(INSTALLATION):
+        backup.restore_to_url(manifest, target_url)
+        tfactory = sessionmaker(bind=target)
+        with tfactory() as db:
+            verification = backup.verify_backup(db, manifest, installation_id=INSTALLATION)
+            restored_lead = (
+                db.query(Lead)
+                .filter(Lead.email == "lead-backup@example.invalid")
+                .one()
+            )
+            restored_opp = (
+                db.query(Opportunity)
+                .filter(Opportunity.external_reference == "quote-backup")
+                .one()
+            )
+            assert restored_opp.lead_id == restored_lead.id, (
+                "La FK lead→oportunidad debe sobrevivir al restore"
+            )
+            assert restored_opp.notes and restored_opp.notes[0]["body"] == "nota"
+    assert verification["ok"] is True, f"discrepancias: {verification['mismatches']}"
+
+    source.dispose()
+    target.dispose()
+
+
+def test_rollback_installation_restores_crm_rows() -> None:
+    """Fase B bloque 5: el rollback de datos recupera leads y oportunidades."""
+
+    engine = create_engine(
+        "sqlite+pysqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    _seed_crm(engine)
+    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+    with installation_scope(INSTALLATION):
+        with factory() as db:
+            manifest = backup.create_backup(db, installation_id=INSTALLATION)
+
+        # Simula una mala release: se pierde el CRM local.
+        with factory() as db:
+            db.query(Opportunity).filter(
+                Opportunity.installation_id == INSTALLATION
+            ).delete()
+            db.query(Lead).filter(Lead.installation_id == INSTALLATION).delete()
+            db.commit()
+            assert db.query(Lead).count() == 0
+
+        backup.rollback_installation(engine, manifest, installation_id=INSTALLATION)
+
+        with factory() as db:
+            assert (
+                db.query(Lead).filter(Lead.installation_id == INSTALLATION).count()
+                == 1
+            ), "El rollback debe recuperar el lead"
+            assert (
+                db.query(Opportunity)
+                .filter(Opportunity.installation_id == INSTALLATION)
+                .count()
+                == 1
+            ), "El rollback debe recuperar la oportunidad"
+    engine.dispose()
+
+
+def test_restore_rto_is_measured_and_bounded(tmp_path) -> None:
+    """Fase B bloque 5: mide el RTO del restore y lo acota.
+
+    Metodología RPO/RTO:
+
+    - **RPO** = cadencia programada de backups (parámetro operacional, p.
+      ej. cron diario → RPO ≤ 24 h). El RPO no lo fija el código sino el
+      scheduler que invoca ``scripts/backup-restore-integral.sh``.
+    - **RTO** = tiempo transcurrido del restore hasta datos consultables.
+      Este eval lo mide sobre un corpus representativo y exige un límite
+      generoso para detectar regresiones patológicas (p. ej. inserciones
+      N+1 que degradarían el RTO con catálogos grandes).
+    """
+    source_path = tmp_path / "src-rto.db"
+    target_path = tmp_path / "tgt-rto.db"
+    source = create_engine(f"sqlite+pysqlite:///{source_path.as_posix()}")
+    Base.metadata.create_all(source)
+    _seed(source)
+    _seed_crm(source)
+
+    factory = sessionmaker(bind=source)
+    with installation_scope(INSTALLATION):
+        with factory() as db:
+            manifest = backup.create_backup(db, installation_id=INSTALLATION)
+
+    target_url = f"sqlite+pysqlite:///{target_path.as_posix()}"
+    backup.prepare_restore_target(target_url)
+    started = time.perf_counter()
+    with installation_scope(INSTALLATION):
+        backup.restore_to_url(manifest, target_url)
+    elapsed = time.perf_counter() - started
+
+    total_rows = sum(entry["count"] for entry in manifest["tables"].values())
+    assert elapsed < 10.0, (
+        f"RTO del restore excesivo: {elapsed:.2f}s para {total_rows} filas"
+    )
+    print(
+        f"[RTO] restore SQLite: {elapsed:.3f}s para {total_rows} filas "
+        f"({manifest['tables']['leads']['count']} leads, "
+        f"{manifest['tables']['opportunities']['count']} oportunidades)"
+    )
+
+    target = create_engine(target_url)
+    with installation_scope(INSTALLATION):
+        tfactory = sessionmaker(bind=target)
+        with tfactory() as db:
+            verification = backup.verify_backup(db, manifest, installation_id=INSTALLATION)
+    assert verification["ok"] is True
+    source.dispose()
+    target.dispose()
 
 
 @pytest.mark.skipif(

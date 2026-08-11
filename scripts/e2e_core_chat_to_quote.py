@@ -1,9 +1,11 @@
-"""E2E core contra el stack Docker en vivo: chat -> lead -> presupuesto.
+"""E2E core contra el stack Docker en vivo (Fase B, bloque 2).
 
-Flujo (Ruta A): se envía un webhook de Chatwoot FIRMADO al Bridge, que debe
-buscar un producto real del catalogo, capturar el lead y crear un presupuesto.
+Flujo (Ruta A): webhook de Chatwoot FIRMADO al Bridge -> producto real del
+catálogo -> lead local -> presupuesto -> CONFIRMAR -> pedido -> borrador de
+factura -> aprobación admin. Sin GHL, sin PrestaShop, sin mocks: el ciclo
+comercial mínimo termina en una factura aprobada (PR-27).
+
 No usa mocks ni Supabase; corre contra http://localhost:9000 (proxy -> bridge-api).
-
 Requiere que el perfil core este levantado y .env con CHATWOOT_WEBHOOK_SECRET.
 Uso:
     python scripts/e2e_core_chat_to_quote.py [BASE_URL]
@@ -15,6 +17,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -127,6 +130,49 @@ def main() -> int:
     if action not in ("quote_created", "quote_already_exists", "verified_product_recommendations"):
         raise SystemExit(f"accion inesperada: {action}")
     print(f"[4] E2E OK: action={action}")
+
+    # 5) ciclo completo: confirmar -> pedido -> borrador de factura -> aprobación
+    match = re.search(r"CONFIRMAR ([A-F0-9]{32})", body.get("reply", ""))
+    if not match:
+        print("[5] sin token CONFIRMAR en la respuesta; flujo termina en presupuesto")
+        return 0
+    token = match.group(1)
+    confirm_payload = {
+        "event": "message_created",
+        "id": f"e2e-confirm-{uuid.uuid4().hex}",
+        "message_type": "incoming",
+        "content": f"CONFIRMAR {token}",
+        "private": False,
+        "account": payload["account"],
+        "conversation": payload["conversation"],
+        "sender": payload["sender"],
+    }
+    raw_confirm = json.dumps(confirm_payload, separators=(",", ":"), ensure_ascii=False).encode()
+    ts_confirm = str(int(time.time()))
+    sig_confirm = hmac.new(secret.encode(), ts_confirm.encode() + b"." + raw_confirm, hashlib.sha256).hexdigest()
+    confirm = client.post(
+        f"{BASE}/webhooks/chatwoot",
+        content=raw_confirm,
+        headers={
+            "Content-Type": "application/json",
+            "X-Chatwoot-Timestamp": ts_confirm,
+            "X-Chatwoot-Signature": f"sha256={sig_confirm}",
+            "X-Chatwoot-Delivery": f"del-{uuid.uuid4().hex}",
+        },
+    )
+    print(f"[5] confirm status={confirm.status_code}")
+    confirm_body = confirm.json()
+    print(json.dumps(confirm_body, ensure_ascii=False, indent=2))
+    if confirm.status_code != 200 or confirm_body.get("action") not in ("order_created", "order_already_exists"):
+        raise SystemExit("confirmacion fallo")
+    approval_id = confirm_body.get("approval_id")
+    if not approval_id:
+        raise SystemExit("sin approval_id tras confirmar; no hay borrador de factura")
+    approved = client.post(f"{BASE}/approvals/{approval_id}/approve", json={}, headers=auth)
+    print(f"[6] approve status={approved.status_code}: {approved.json()}")
+    if approved.status_code != 200 or approved.json().get("status") != "approved":
+        raise SystemExit("aprobacion fallo")
+    print(f"[7] E2E completo OK: action={action}, order={confirm_body.get('order_id')}, approval={approval_id}")
     return 0
 
 
