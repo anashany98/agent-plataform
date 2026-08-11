@@ -22,7 +22,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from sqlalchemy import func, update
+from sqlalchemy import func, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -56,6 +56,31 @@ class OutboxService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
+    def _signal_worker(self, message: OutboxMessage) -> None:
+        """Señal best-effort al worker durable (Fase B, bloque 3).
+
+        Si Redis está habilitado, encola el id del mensaje en la cola de
+        señal para que el worker no espere al poll. Cualquier fallo se
+        ignora: el worker vuelve al poll determinista.
+        """
+        if not getattr(settings, "REDIS_ENABLED", False):
+            return
+        try:
+            import redis as _redis
+
+            client = _redis.Redis.from_url(
+                settings.REDIS_URL,
+                socket_timeout=0.2,
+                socket_connect_timeout=0.2,
+                decode_responses=True,
+            )
+            try:
+                client.lpush("bridge:outbox:signal", message.id)
+            finally:
+                client.close()
+        except Exception:  # noqa: BLE001 — señal best-effort
+            pass
+
     def enqueue(
         self,
         *,
@@ -86,6 +111,8 @@ class OutboxService:
             if existing is None:
                 raise
             return existing, False
+        if message.state in {"pending", "processing"}:
+            self._signal_worker(message)
         return message, True
 
     def _find(self, topic: str, idempotency_key: str) -> OutboxMessage | None:
@@ -145,10 +172,56 @@ class OutboxService:
         now: datetime.datetime | None = None,
         limit: int | None = None,
     ) -> dict[str, int]:
-        """Procesa mensajes pendientes vencidos; devuelve un resumen."""
+        """Procesa mensajes pendientes vencidos; devuelve un resumen.
+
+        Antes de despachar reclama (Fase B, bloque 3) los mensajes que un
+        worker anterior dejó en ``processing`` con lease vencido o sin lease
+        (crash del proceso): los devuelve a ``pending`` con el contador
+        incrementado para que se reintenten sin esperar intervención manual.
+        """
 
         now = now or utcnow()
         batch_size = max(1, min(int(limit or settings.OUTBOX_BATCH_SIZE), 64))
+        # Reclaim atómico: solo el worker cuyo UPDATE transiciona el estado
+        # gana el mensaje; el contador avanza para acotar los reintentos.
+        # ``processing_until`` se escribe como now + lease en el claim; un
+        # mensaje está vencido cuando processing_until <= now (o sin lease).
+        stale = (
+            self.db.query(OutboxMessage)
+            .filter(
+                OutboxMessage.state == "processing",
+                or_(
+                    OutboxMessage.processing_until.is_(None),
+                    OutboxMessage.processing_until <= now,
+                ),
+            )
+            .limit(batch_size)
+            .all()
+        )
+        reclaimed = 0
+        for message in stale:
+            result = self.db.execute(
+                update(OutboxMessage)
+                .where(
+                    OutboxMessage.id == message.id,
+                    OutboxMessage.state == "processing",
+                    or_(
+                        OutboxMessage.processing_until.is_(None),
+                        OutboxMessage.processing_until <= now,
+                    ),
+                )
+                .values(
+                    state="pending",
+                    processing_until=None,
+                    next_attempt_at=now,
+                    attempt_count=OutboxMessage.attempt_count + 1,
+                    updated_at=now,
+                )
+            )
+            if result.rowcount == 1:
+                reclaimed += 1
+        if reclaimed:
+            self.db.commit()
         due = (
             self.db.query(OutboxMessage)
             .filter(
@@ -161,6 +234,7 @@ class OutboxService:
         )
         summary = {
             "evaluated": len(due),
+            "reclaimed": reclaimed,
             "sent": 0,
             "retry_scheduled": 0,
             "dead": 0,
@@ -188,19 +262,25 @@ class OutboxService:
         dispatcher: Dispatcher,
         now: datetime.datetime,
     ) -> None:
+        lease = int(getattr(settings, "OUTBOX_WORKER_LEASE_SEC", 60))
         claimed = self.db.execute(
             update(OutboxMessage)
             .where(
                 OutboxMessage.id == message.id,
                 OutboxMessage.state == "pending",
             )
-            .values(state="processing", updated_at=now)
+            .values(
+                state="processing",
+                processing_until=now + datetime.timedelta(seconds=lease),
+                updated_at=now,
+            )
         ).rowcount
         self.db.commit()
         if claimed != 1:
             self.db.refresh(message)
             return
         message.state = "processing"
+        message.processing_until = now + datetime.timedelta(seconds=lease)
         await self._process(message, dispatcher, now)
 
     async def _process(
@@ -218,6 +298,7 @@ class OutboxService:
             self._register_failure(message, exc, now)
             return
         message.state = "sent"
+        message.processing_until = None
         message.response_body = response if isinstance(response, dict) else {"result": response}
         message.sent_at = now
         message.last_error = None
@@ -249,6 +330,7 @@ class OutboxService:
         message.last_error = _error_payload(exc)
         message.updated_at = now
         message.state = "pending"
+        message.processing_until = None
         message.next_attempt_at = now + datetime.timedelta(
             seconds=self.backoff_seconds(message.attempt_count)
         )
@@ -276,6 +358,7 @@ class OutboxService:
         if not session_rolled_back:
             self.db.rollback()
         message.state = "dead"
+        message.processing_until = None
         message.last_error = _error_payload(exc, permanent=permanent)
         message.updated_at = now
         self._audit_transition(

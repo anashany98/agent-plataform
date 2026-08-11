@@ -79,10 +79,33 @@ if settings.AUTO_CREATE_SCHEMA:
     Base.metadata.create_all(bind=engine)
 seed_database()
 
+async def lifespan(app: FastAPI):
+    """Arranca/para el worker durable del outbox (Fase B, bloque 3).
+
+    ``OUTBOX_DISPATCHERS`` se define más abajo en este módulo; el late
+    binding es intencional: el lifespan se ejecuta al arrancar el servidor,
+    cuando el diccionario ya existe. El worker es opcional
+    (``OUTBOX_WORKER_ENABLED=true``); en tests queda deshabilitado.
+    """
+    worker = None
+    if getattr(settings, "OUTBOX_WORKER_ENABLED", False):
+        from app.services.outbox_worker import DurableOutboxWorker
+
+        worker = DurableOutboxWorker(OUTBOX_DISPATCHERS)
+        await worker.start()
+    app.state.outbox_worker = worker
+    try:
+        yield
+    finally:
+        if worker is not None:
+            await worker.stop()
+
+
 app = FastAPI(
     title="Plataforma de Agentes IA — API puente",
     version="0.9.1-security-remediation",
     description="Núcleo transaccional seguro para catálogo, conversaciones, oportunidades y aprobaciones.",
+    lifespan=lifespan,
 )
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
 app.add_middleware(RateLimitMiddleware)

@@ -37,6 +37,27 @@ class Settings(BaseSettings):
     LOGIN_RATE_LIMIT_WINDOW_SEC: int = int(os.getenv("LOGIN_RATE_LIMIT_WINDOW_SEC", "900"))
     TRUSTED_PROXY_COUNT: int = int(os.getenv("TRUSTED_PROXY_COUNT", "1"))
 
+    # -----------------------------------------------------------------------
+    # Fase B (bloque 3): Redis real como backend de rate limit, locks y
+    # cola del worker durable. Por defecto el core opera SIN Redis
+    # (memoria/BD); REDIS_ENABLED=true lo activa en instalaciones
+    # multi-worker o cuando el compose levanta bridge-redis.
+    # -----------------------------------------------------------------------
+    REDIS_ENABLED: bool = _bool("REDIS_ENABLED", "false")
+    # auto = Redis si está disponible, si no memoria; redis = exigir Redis
+    # (fail-closed si cae); memory = nunca usar Redis para rate limit.
+    RATE_LIMIT_BACKEND: str = os.getenv("RATE_LIMIT_BACKEND", "auto")
+    # Si Redis falla en rate limit, degradar a memoria (fail-open) en lugar
+    # de rechazar tráfico. Nunca debe tumbar el servicio por un backend caído.
+    REDIS_RATE_LIMIT_FAIL_OPEN: bool = _bool("REDIS_RATE_LIMIT_FAIL_OPEN", "true")
+    REDIS_SOCKET_TIMEOUT_SEC: float = float(os.getenv("REDIS_SOCKET_TIMEOUT_SEC", "0.5"))
+    REDIS_CONNECT_TIMEOUT_SEC: float = float(os.getenv("REDIS_CONNECT_TIMEOUT_SEC", "0.5"))
+    # Worker durable del outbox: procesa la cola en segundo plano.
+    OUTBOX_WORKER_ENABLED: bool = _bool("OUTBOX_WORKER_ENABLED", "false")
+    OUTBOX_WORKER_POLL_SEC: float = float(os.getenv("OUTBOX_WORKER_POLL_SEC", "1.0"))
+    OUTBOX_WORKER_LEASE_SEC: int = int(os.getenv("OUTBOX_WORKER_LEASE_SEC", "60"))
+    OUTBOX_WORKER_DISPATCH_LOCK_SEC: int = int(os.getenv("OUTBOX_WORKER_DISPATCH_LOCK_SEC", "30"))
+
     CHATWOOT_BASE_URL: str = os.getenv("CHATWOOT_BASE_URL", "http://chatwoot-web:3000")
     CHATWOOT_API_TOKEN: str = os.getenv("CHATWOOT_API_TOKEN", "")
     CHATWOOT_WEBHOOK_SECRET: str = os.getenv("CHATWOOT_WEBHOOK_SECRET", "")

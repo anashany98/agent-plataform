@@ -198,6 +198,10 @@ class OutboxMessage(InstallationOwnedMixin, Base):
         default=lambda: int(settings.OUTBOX_MAX_ATTEMPTS),
     )
     next_attempt_at = Column(DateTime, nullable=False, default=utcnow, index=True)
+    # Lease del worker durable (Fase B, bloque 3): cuando un worker toma el
+    # mensaje escribe processing_until = now + lease; si el proceso muere,
+    # un reclaim con processing_until vencido lo devuelve a pending.
+    processing_until = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=utcnow, nullable=False)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
     sent_at = Column(DateTime, nullable=True)

@@ -360,7 +360,7 @@ def test_clean_install_upgrades_to_explicit_model_schema(sqlite_migration_contex
     command.upgrade(config, "head")
 
     _assert_schema_matches_models(engine)
-    assert _current_revision(engine) == "0007"
+    assert _current_revision(engine) == "0008"
 
 
 def test_historical_0001_upgrade_backfills_tenant_and_lifecycle_data(
@@ -407,7 +407,7 @@ def test_historical_0001_upgrade_backfills_tenant_and_lifecycle_data(
         assert reservation.installation_id == MIGRATION_INSTALLATION_ID
         assert reservation.expires_at is not None
         assert reservation.released_at is not None
-    assert _current_revision(engine) == "0007"
+    assert _current_revision(engine) == "0008"
 
 
 def test_historical_upgrade_fails_closed_without_installation_id(
@@ -705,7 +705,7 @@ def test_reupgrade_after_safe_downgrade_keeps_fixture(sqlite_migration_context) 
 
     _assert_schema_matches_models(engine)
     _assert_fixture_survives(engine)
-    assert _current_revision(engine) == "0007"
+    assert _current_revision(engine) == "0008"
 
 
 def test_reupgrade_allows_managed_active_reservation(sqlite_migration_context) -> None:
@@ -736,7 +736,7 @@ def test_reupgrade_allows_managed_active_reservation(sqlite_migration_context) -
         assert reservation.status == "active"
         assert reservation.expires_at is not None
         assert reservation.installation_id == MIGRATION_INSTALLATION_ID
-    assert _current_revision(engine) == "0007"
+    assert _current_revision(engine) == "0008"
 
 
 def test_0006_is_dialect_skip_on_sqlite(sqlite_migration_context) -> None:
@@ -762,4 +762,4 @@ def test_0006_is_dialect_skip_on_sqlite(sqlite_migration_context) -> None:
         "En SQLite la tabla product_embeddings NO debe crearse: el tipo "
         "vector no existe en este dialecto."
     )
-    assert _current_revision(engine) == "0007"
+    assert _current_revision(engine) == "0008"
