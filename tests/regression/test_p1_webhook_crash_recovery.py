@@ -5,6 +5,10 @@ El webhook checkpointa su resultado después de cada efecto externo visible
 idempotencia, la redelivery detecta el checkpoint y completa sin repetir el
 efecto. Un fallo anterior a cualquier efecto se reintenta con normalidad.
 
+También cubre T-021: la matriz de ramas de éxito del webhook. Cada rama debe
+dejarse en ``completed`` (no en ``processing``) para que un replay inmediato
+devuelva 200 con el resultado cacheado y nunca 202 ``processing``.
+
 Hermetismo: los crashes se inyectan con monkeypatches; ningún test contacta
 servicios externos.
 """
@@ -285,6 +289,283 @@ def test_hard_crash_stuck_processing_recovers_via_expired_lease(
             IdempotencyRecord.idempotency_key == idempotency_key
         ).one()
         assert record.state == "completed"
+        assert db.query(Quote).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# T-021: matriz de ramas de éxito — el replay inmediato devuelve el resultado
+# completado (200, ``duplicate_ignored``) y nunca 202 ``processing``.
+# ---------------------------------------------------------------------------
+
+
+WEBHOOK_SUCCESS_BRANCHES = [
+    # (etiqueta, payload, action esperada en la primera respuesta)
+    (
+        "event_no_message_created",
+        {
+            "event": "conversation_created",
+            "id": "branch-evt-1",
+            "account": {"id": 6161},
+            "conversation": {"id": 7272},
+        },
+        None,  # action no aplica; status esperado: received
+        "received",
+    ),
+    (
+        "outgoing_message",
+        {
+            "event": "message_created",
+            "id": "branch-out-1",
+            "message_type": "outgoing",
+            "content": "hola",
+            "account": {"id": 6161},
+            "conversation": {"id": 7272},
+            "sender": {"id": 1, "name": "Asistente", "email": "bot@example.invalid"},
+        },
+        None,
+        "processed",
+    ),
+    (
+        "greeting",
+        {
+            "event": "message_created",
+            "id": "branch-greet-1",
+            "message_type": "incoming",
+            "content": "hola",
+            "account": {"id": 6161},
+            "conversation": {"id": 7272},
+            "sender": {"id": 1, "name": "Cliente", "email": "cliente-branch@example.invalid"},
+        },
+        "greeting",
+        "success",
+    ),
+    (
+        "human_handoff",
+        {
+            "event": "message_created",
+            "id": "branch-human-1",
+            "message_type": "incoming",
+            "content": "quiero hablar con un humano",
+            "account": {"id": 6161},
+            "conversation": {"id": 7272},
+            "sender": {"id": 1, "name": "Cliente", "email": "cliente-handoff@example.invalid"},
+        },
+        "human_handoff",
+        "success",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,payload,expected_action,expected_status",
+    WEBHOOK_SUCCESS_BRANCHES,
+    ids=[row[0] for row in WEBHOOK_SUCCESS_BRANCHES],
+)
+def test_success_branch_replay_returns_cached_result_not_processing(
+    isolated_api: IsolatedApi,
+    monkeypatch: pytest.MonkeyPatch,
+    label: str,
+    payload: dict[str, Any],
+    expected_action: str | None,
+    expected_status: str,
+) -> None:
+    """T-021: cada rama de éxito debe terminar en ``completed``.
+
+    El replay inmediato del mismo ``message_id`` debe devolver 200 con el
+    resultado cacheado (``duplicate_ignored``), no 202 ``processing``.
+    """
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "")
+
+    idempotency_key = f"chatwoot:6161:{payload['id']}"
+
+    first = _signed_chatwoot_request(isolated_api.client, payload)
+    assert first.status_code == 200, (
+        f"[{label}] primer envío: status={first.status_code}, text={first.text}"
+    )
+    first_body = first.json()
+    assert first_body.get("status") == expected_status, (
+        f"[{label}] status inesperado en el primer envío: {first_body}"
+    )
+    if expected_action is not None:
+        assert first_body.get("action") == expected_action, (
+            f"[{label}] action inesperada: {first_body}"
+        )
+
+    with _isolated_session(isolated_api) as db:
+        record = db.query(IdempotencyRecord).filter(
+            IdempotencyRecord.idempotency_key == idempotency_key
+        ).one()
+        assert record.state == "completed", (
+            f"[{label}] la rama de éxito dejó el registro en "
+            f"'{record.state}' en lugar de 'completed'"
+        )
+
+    # Replay inmediato: debe devolver 200 con el resultado cacheado, nunca
+    # 202 ``processing``.
+    second = _signed_chatwoot_request(isolated_api.client, payload)
+    assert second.status_code == 200, (
+        f"[{label}] el replay devolvió {second.status_code} en lugar de 200; "
+        "el estado quedó en 'processing' por una rama temprana sin completar"
+    )
+    second_body = second.json()
+    assert second_body.get("status") == "duplicate_ignored", (
+        f"[{label}] el replay devolvió {second_body.get('status')}; se esperaba "
+        "'duplicate_ignored' con el resultado cacheado"
+    )
+    cached = second_body.get("original_response") or second_body
+    assert cached == first_body, (
+        f"[{label}] el replay debería devolver el body cacheado del primer envío; "
+        f"first={first_body}, cached={cached}"
+    )
+
+    with _isolated_session(isolated_api) as db:
+        record = db.query(IdempotencyRecord).filter(
+            IdempotencyRecord.idempotency_key == idempotency_key
+        ).one()
+        assert record.state == "completed"
+        assert record.attempt_count == 1, (
+            f"[{label}] el replay no debe re-ejecutar el flujo"
+        )
+
+
+def test_success_branch_with_effects_replay_does_not_repeat_effects(
+    isolated_api: IsolatedApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-021: la rama con efectos externos (quote) termina completada y el
+    replay no repite ni la respuesta ni el efecto comercial.
+    """
+    _seed_product(isolated_api)
+    outbound: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_chatwoot(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        outbound.append((path, payload))
+        return {"status": "captured"}
+
+    monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", capture_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
+
+    suffix = uuid.uuid4().hex
+    payload = _webhook_payload(suffix, f"lead-matrix-{suffix[:10]}@example.com")
+    idempotency_key = f"chatwoot:6161:{payload['id']}"
+
+    first = _signed_chatwoot_request(isolated_api.client, payload)
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body.get("action") == "quote_created", first_body
+    assert len(_replies_sent(outbound)) == 1
+
+    with _isolated_session(isolated_api) as db:
+        record = db.query(IdempotencyRecord).filter(
+            IdempotencyRecord.idempotency_key == idempotency_key
+        ).one()
+        assert record.state == "completed", (
+            f"la rama quote_created dejó '{record.state}' en lugar de 'completed'"
+        )
+
+    # Replay inmediato: 200 con el resultado cacheado y sin repetir efectos.
+    second = _signed_chatwoot_request(isolated_api.client, payload)
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert second_body.get("status") == "duplicate_ignored", second_body
+    cached = second_body.get("original_response") or second_body
+    assert cached == first_body
+    assert len(_replies_sent(outbound)) == 1, (
+        "El replay no puede repetir la respuesta al cliente"
+    )
+
+    with _isolated_session(isolated_api) as db:
+        assert db.query(Quote).count() == 1, "El replay no puede duplicar el presupuesto"
+        assert db.query(IdempotencyRecord).filter(
+            IdempotencyRecord.idempotency_key == idempotency_key
+        ).one().state == "completed"
+
+
+def test_concurrent_delivery_with_live_lease_returns_202_and_takeover_after_expiry(
+    isolated_api: IsolatedApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-021: la ventana concurrente no duplica efectos.
+
+    Mientras un worker (A) mantiene el lease vivo, una segunda entrega (B)
+    del mismo ``message_id`` debe devolver 202 ``processing`` SIN ejecutar
+    ningún efecto. Cuando el lease de A caduca, B hace takeover y ejecuta el
+    flujo exactamente una vez; el replay posterior devuelve 200 cacheado.
+    """
+    _seed_product(isolated_api)
+    outbound: list[tuple[str, dict[str, Any]]] = []
+
+    async def capture_chatwoot(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        outbound.append((path, payload))
+        return {"status": "captured"}
+
+    monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", capture_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
+
+    suffix = uuid.uuid4().hex
+    payload = _webhook_payload(suffix, f"lead-conc-{suffix[:10]}@example.com")
+    idempotency_key = f"chatwoot:6161:{payload['id']}"
+
+    # Worker A claima el mensaje y se queda procesando (lease vivo).
+    with _isolated_session(isolated_api) as db:
+        now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+        db.add(
+            IdempotencyRecord(
+                installation_id=INSTALLATION_ID,
+                idempotency_key=idempotency_key,
+                state="processing",
+                status_code=102,
+                owner_id="worker-a",
+                lease_expires_at=now + dt.timedelta(seconds=300),
+                heartbeat_at=now,
+                event_payload=payload,
+                request_fingerprint=bridge_main._idempotency_fingerprint(payload),
+                attempt_count=1,
+                response_body={"status": "processing"},
+            )
+        )
+        db.commit()
+
+    # Entrega concurrente de B con lease vivo: 202, sin efectos.
+    while_b = _signed_chatwoot_request(isolated_api.client, payload)
+    assert while_b.status_code == 202, (
+        f"Con lease vivo la entrega concurrente debe devolver 202, no "
+        f"{while_b.status_code} ({while_b.text})"
+    )
+    assert while_b.json().get("status") == "processing"
+    assert len(_replies_sent(outbound)) == 0, (
+        "Un worker concurrente con lease vivo no puede ejecutar efectos"
+    )
+    with _isolated_session(isolated_api) as db:
+        assert db.query(Quote).count() == 0
+
+    # El lease de A caduca: B hace takeover y ejecuta exactamente una vez.
+    with _isolated_session(isolated_api) as db:
+        record = db.query(IdempotencyRecord).filter(
+            IdempotencyRecord.idempotency_key == idempotency_key
+        ).one()
+        record.lease_expires_at = dt.datetime.now(dt.UTC).replace(tzinfo=None) - dt.timedelta(seconds=30)
+        db.commit()
+
+    takeover = _signed_chatwoot_request(isolated_api.client, payload)
+    assert takeover.status_code == 200, takeover.text
+    takeover_body = takeover.json()
+    assert takeover_body.get("status") == "success", takeover_body
+    assert takeover_body.get("action") == "quote_created", takeover_body
+    assert len(_replies_sent(outbound)) == 1, "El takeover ejecuta el flujo una sola vez"
+
+    with _isolated_session(isolated_api) as db:
+        record = db.query(IdempotencyRecord).filter(
+            IdempotencyRecord.idempotency_key == idempotency_key
+        ).one()
+        assert record.state == "completed"
+        assert record.attempt_count == 2
+        assert db.query(Quote).count() == 1
+
+    # Replay final: 200 cacheado, sin efectos nuevos.
+    final = _signed_chatwoot_request(isolated_api.client, payload)
+    assert final.status_code == 200
+    assert final.json().get("status") == "duplicate_ignored"
+    assert len(_replies_sent(outbound)) == 1
+    with _isolated_session(isolated_api) as db:
         assert db.query(Quote).count() == 1
 
 
