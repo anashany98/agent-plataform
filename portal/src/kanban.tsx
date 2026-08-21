@@ -79,17 +79,6 @@ function formatValue(value: number, currency: string): string {
   return `${Number.isFinite(value) ? value.toFixed(2) : "—"} ${currency}`;
 }
 
-function formatDate(value: string | null): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "—";
-  return date.toLocaleString("es-ES", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
-}
-
 function Card({
   card,
   dragging,

@@ -13,11 +13,6 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CeoChat } from "./ceoChat";
 
-type MockSpeechResult = {
-  isFinal: boolean;
-  transcript: string;
-};
-
 class FakeSpeechRecognition {
   lang = "";
   interimResults = false;
@@ -63,6 +58,8 @@ function installSpeechRecognition(enabled: boolean) {
     .SpeechRecognition = class extends FakeSpeechRecognition {
     constructor() {
       super();
+      // El mock necesita capturar la instancia para las aserciones de voz.
+      // eslint-disable-next-line @typescript-eslint/no-this-alias
       fakeRecognition = this;
     }
   };

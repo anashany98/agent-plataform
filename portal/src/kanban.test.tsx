@@ -195,7 +195,6 @@ test("la cola expone la puntuación de cada lead con sus señales", async () => 
 
 test("mover una tarjeta a otra columna llama al PATCH auditado y recarga", async () => {
   const captured: CapturedRequest[] = [];
-  const user = userEvent.setup();
   await renderKanban({ captured });
   const card = screen.getByLabelText(/Cubo 20L/);
   const wonColumn = screen

@@ -497,7 +497,7 @@ test("los nuevos módulos son navegables y no presentan violaciones axe básicas
 test("el panel muestra el historial de sincronización de PrestaShop", async () => {
   loginSession("provider_admin");
   const calls = mockApi(routesFor("provider_admin"));
-  const { container } = render(<App />);
+  render(<App />);
 
   await waitForDashboard();
 

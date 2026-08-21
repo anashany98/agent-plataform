@@ -49,7 +49,7 @@ export function EmailSection({
 }) {
   const [templates, setTemplates] = useState<EmailTemplate[] | null>(null);
   const [variables, setVariables] = useState<TemplateListResponse["variables"]>([]);
-  const [settings, setSettings] = useState<EmailSettings | null>(null);
+  const [, setSettings] = useState<EmailSettings | null>(null);
   const [events, setEvents] = useState<TrackingEvent[] | null>(null);
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");

@@ -124,7 +124,7 @@ export function ActivitiesSection({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [token]);
 
   async function createActivity(event: FormEvent) {

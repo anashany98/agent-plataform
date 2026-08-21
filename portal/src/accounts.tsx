@@ -74,7 +74,7 @@ export function AccountsSection({
   const [rows, setRows] = useState<AccountRow[] | null>(null);
   const [error, setError] = useState("");
   const [detail, setDetail] = useState<AccountDetail | null>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [, setLoadingDetail] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     name: "",

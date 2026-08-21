@@ -200,7 +200,7 @@ test("las preguntas de ejemplo se envían al chat real del asistente", async () 
 
 test("«Mostrar todos los módulos» persiste y revela la navegación completa", async () => {
   loginSession();
-  const calls = mockApi(routesFor());
+  mockApi(routesFor());
   const { container } = render(<App />);
 
   await waitForOnboarding();
@@ -258,7 +258,7 @@ test("«Seguir en modo guiado» cierra el overlay pero mantiene ocultos los mód
 test("el botón de la barra lateral revela los módulos sin pasar por el overlay", async () => {
   loginSession();
   mockApi(routesFor());
-  const { container } = render(<App />);
+  render(<App />);
 
   await waitForOnboarding();
   await userEvent.click(

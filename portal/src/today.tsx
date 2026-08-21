@@ -6,7 +6,6 @@ import {
   Mail,
   MessageSquare,
   Package,
-  RefreshCw,
   ShieldCheck,
 } from "lucide-react";
 import { apiRequest } from "./api";
