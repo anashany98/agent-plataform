@@ -51,7 +51,9 @@ async function renderSection(
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = requestPath(input);
     const method = init?.method ?? "GET";
-    const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined;
+    const body = init?.body
+      ? (JSON.parse(String(init.body)) as unknown)
+      : undefined;
     captured.push({ path, method, body });
     if (method === "GET" && path === "/email/templates") {
       return response({ items: templates, variables: VARIABLES });
@@ -110,11 +112,15 @@ test("lista plantillas con variables y eventos de tracking", async () => {
   );
 
   await waitFor(() =>
-    expect(screen.getAllByText("Seguimiento de presupuesto").length).toBeGreaterThanOrEqual(1),
+    expect(
+      screen.getAllByText("Seguimiento de presupuesto").length,
+    ).toBeGreaterThanOrEqual(1),
   );
   expect(screen.getByText(/Tu presupuesto/)).toBeTruthy();
   // Variables del catálogo en el formulario.
-  expect(screen.getAllByText("{{store_name}}").length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByText("{{store_name}}").length).toBeGreaterThanOrEqual(
+    1,
+  );
   expect(screen.getByText("Apertura")).toBeTruthy();
   expect(screen.getByText("cliente@example.invalid")).toBeTruthy();
 });
@@ -144,7 +150,8 @@ test("crear una plantilla envía el POST con nombre, asunto y cuerpo", async () 
 
   await waitFor(() => {
     const post = captured.find(
-      (request) => request.method === "POST" && request.path === "/email/templates",
+      (request) =>
+        request.method === "POST" && request.path === "/email/templates",
     );
     expect(post).toBeTruthy();
     expect(post?.body).toMatchObject({
@@ -164,17 +171,23 @@ test("enviar prueba pide destino y muestra el estado del spool", async () => {
   await renderSection([templateFixture()], captured);
 
   await waitFor(() =>
-    expect(screen.getAllByText("Seguimiento de presupuesto").length).toBeGreaterThanOrEqual(1),
+    expect(
+      screen.getAllByText("Seguimiento de presupuesto").length,
+    ).toBeGreaterThanOrEqual(1),
   );
   await user.click(screen.getByRole("button", { name: "Enviar prueba" }));
 
   await waitFor(() => {
-    const post = captured.find((request) => request.path.endsWith("/send-test"));
+    const post = captured.find((request) =>
+      request.path.endsWith("/send-test"),
+    );
     expect(post).toBeTruthy();
     expect(post?.body).toMatchObject({ to: "cliente@example.invalid" });
   });
   // El token se muestra recortado a 8 caracteres en el flash.
-  await waitFor(() => expect(screen.getByText(/tracking tk-abc1/)).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText(/tracking tk-abc1/)).toBeTruthy(),
+  );
   promptSpy.mockRestore();
 });
 
@@ -189,11 +202,14 @@ test("guardar la configuración de email envía el PUT", async () => {
     screen.getByLabelText("Firma de instalación"),
     "Un saludo,\nVentas BTOP",
   );
-  await user.click(screen.getByRole("button", { name: "Guardar configuración" }));
+  await user.click(
+    screen.getByRole("button", { name: "Guardar configuración" }),
+  );
 
   await waitFor(() => {
     const put = captured.find(
-      (request) => request.method === "PUT" && request.path === "/email/settings",
+      (request) =>
+        request.method === "PUT" && request.path === "/email/settings",
     );
     expect(put).toBeTruthy();
     expect(put?.body).toMatchObject({ signature: "Un saludo,\nVentas BTOP" });
@@ -224,7 +240,8 @@ test("desactivar y eliminar una plantilla envían PATCH y DELETE", async () => {
   await waitFor(() => {
     const del = captured.find(
       (request) =>
-        request.method === "DELETE" && request.path === "/email/templates/tpl-1",
+        request.method === "DELETE" &&
+        request.path === "/email/templates/tpl-1",
     );
     expect(del).toBeTruthy();
   });

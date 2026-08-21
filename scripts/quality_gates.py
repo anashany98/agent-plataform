@@ -213,8 +213,14 @@ def gate_pytest(root: Path) -> GateResult:
             env={**os.environ, "PYTHONPATH": str(root / "bridge-api")},
         )
         if proc.returncode != 0:
-            tail = "\n".join((proc.stdout or "").splitlines()[-5:])
-            return GateResult("pytest", False, 1, f"corpus {' '.join(order)} falló\n{tail}")
+            # Visibilidad de fallos en CI: listar TODOS los tests caídos,
+            # no solo las últimas líneas (el corpus puede fallar en varios
+            # puntos y el resumen recortado oculta la causa).
+            output_lines = (proc.stdout or "").splitlines()
+            failed_lines = [line for line in output_lines if line.startswith("FAILED")]
+            tail = "\n".join(output_lines[-5:])
+            detail = "\n".join(part for part in ("\n".join(failed_lines), tail) if part)
+            return GateResult("pytest", False, 1, f"corpus {' '.join(order)} falló\n{detail}")
     return GateResult("pytest", True, 0, "corpus combinado verde en ambos órdenes")
 
 

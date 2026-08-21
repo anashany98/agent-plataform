@@ -72,7 +72,9 @@ async function renderAccounts(captured: CapturedRequest[] = []) {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = requestPath(input);
     const method = init?.method ?? "GET";
-    const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined;
+    const body = init?.body
+      ? (JSON.parse(String(init.body)) as unknown)
+      : undefined;
     captured.push({ path, method, body });
     if (method === "GET" && path === "/accounts") {
       return new Response(JSON.stringify([accountFixture()]), {
@@ -88,13 +90,19 @@ async function renderAccounts(captured: CapturedRequest[] = []) {
     }
     if (method === "POST" && path === "/accounts") {
       return new Response(
-        JSON.stringify(accountFixture({ name: (body as { name: string }).name })),
+        JSON.stringify(
+          accountFixture({ name: (body as { name: string }).name }),
+        ),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
     if (method === "POST" && path === "/contacts") {
       return new Response(
-        JSON.stringify({ id: "contact-2", account_id: "acc-1", ...(body as object) }),
+        JSON.stringify({
+          id: "contact-2",
+          account_id: "acc-1",
+          ...(body as object),
+        }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
@@ -129,7 +137,10 @@ test("crear una cuenta envía el POST auditado y refresca", async () => {
       (req) => req.method === "POST" && req.path === "/accounts",
     );
     expect(post).toBeTruthy();
-    expect(post?.body).toMatchObject({ name: "BTOP Digital", industry: "Software" });
+    expect(post?.body).toMatchObject({
+      name: "BTOP Digital",
+      industry: "Software",
+    });
   });
 });
 
@@ -141,12 +152,17 @@ test("abrir la ficha muestra contactos, oportunidades y permite crear contacto",
   await waitFor(() => {
     expect(screen.getByText(/Ana Pérez/)).toBeTruthy();
   });
-  expect(screen.getByText("Compradora · ana@acme.test · — · 1 leads")).toBeTruthy();
+  expect(
+    screen.getByText("Compradora · ana@acme.test · — · 1 leads"),
+  ).toBeTruthy();
   expect(screen.getByText("Cubo 20L")).toBeTruthy();
   expect(screen.getByText(/320.00 EUR/)).toBeTruthy();
 
   await user.type(screen.getByLabelText("Nombre del contacto"), "Luis");
-  await user.type(screen.getByLabelText("Email del contacto"), "luis@acme.test");
+  await user.type(
+    screen.getByLabelText("Email del contacto"),
+    "luis@acme.test",
+  );
   await user.click(screen.getByRole("button", { name: "Añadir contacto" }));
   await waitFor(() => {
     const post = captured.find(

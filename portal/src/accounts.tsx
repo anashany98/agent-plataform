@@ -100,7 +100,9 @@ export function AccountsSection({
       setRows(await apiRequest<AccountRow[]>("/accounts", { token }));
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "No se pudieron cargar las cuentas",
+        err instanceof Error
+          ? err.message
+          : "No se pudieron cargar las cuentas",
       );
     }
   }
@@ -129,7 +131,15 @@ export function AccountsSection({
           notes: form.notes.trim() || null,
         }),
       });
-      setForm({ name: "", industry: "", city: "", country: "", website: "", phone: "", notes: "" });
+      setForm({
+        name: "",
+        industry: "",
+        city: "",
+        country: "",
+        website: "",
+        phone: "",
+        notes: "",
+      });
       await load();
     } catch (err) {
       setError(
@@ -148,7 +158,9 @@ export function AccountsSection({
     setError("");
     setLoadingDetail(true);
     try {
-      setDetail(await apiRequest<AccountDetail>(`/accounts/${accountId}`, { token }));
+      setDetail(
+        await apiRequest<AccountDetail>(`/accounts/${accountId}`, { token }),
+      );
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "No se pudo cargar la cuenta",
@@ -160,7 +172,11 @@ export function AccountsSection({
 
   async function createContact(event: FormEvent) {
     event.preventDefault();
-    if (!detail || !contactForm.first_name.trim() || !contactForm.email.trim()) {
+    if (
+      !detail ||
+      !contactForm.first_name.trim() ||
+      !contactForm.email.trim()
+    ) {
       return;
     }
     setError("");
@@ -215,7 +231,11 @@ export function AccountsSection({
         <>
           <div className="accounts-toolbar">
             <span className="counter">{rows.length} cuentas</span>
-            <button type="button" className="secondary-button" onClick={() => void load()}>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void load()}
+            >
               Actualizar
             </button>
           </div>
@@ -282,13 +302,19 @@ export function AccountsSection({
                   </span>
                 </div>
               ))}
-              <form className="contact-form" onSubmit={(event) => void createContact(event)}>
+              <form
+                className="contact-form"
+                onSubmit={(event) => void createContact(event)}
+              >
                 <input
                   aria-label="Nombre del contacto"
                   placeholder="Nombre*"
                   value={contactForm.first_name}
                   onChange={(e) =>
-                    setContactForm({ ...contactForm, first_name: e.target.value })
+                    setContactForm({
+                      ...contactForm,
+                      first_name: e.target.value,
+                    })
                   }
                 />
                 <input
@@ -296,7 +322,10 @@ export function AccountsSection({
                   placeholder="Apellidos"
                   value={contactForm.last_name}
                   onChange={(e) =>
-                    setContactForm({ ...contactForm, last_name: e.target.value })
+                    setContactForm({
+                      ...contactForm,
+                      last_name: e.target.value,
+                    })
                   }
                 />
                 <input
@@ -313,7 +342,10 @@ export function AccountsSection({
                   placeholder="Cargo"
                   value={contactForm.job_title}
                   onChange={(e) =>
-                    setContactForm({ ...contactForm, job_title: e.target.value })
+                    setContactForm({
+                      ...contactForm,
+                      job_title: e.target.value,
+                    })
                   }
                 />
                 <label className="check-row">
@@ -321,12 +353,19 @@ export function AccountsSection({
                     type="checkbox"
                     checked={contactForm.is_primary}
                     onChange={(e) =>
-                      setContactForm({ ...contactForm, is_primary: e.target.checked })
+                      setContactForm({
+                        ...contactForm,
+                        is_primary: e.target.checked,
+                      })
                     }
                   />
                   Principal
                 </label>
-                <button type="submit" className="primary-button" disabled={saving}>
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={saving}
+                >
                   {saving ? "Guardando…" : "Añadir contacto"}
                 </button>
               </form>
@@ -352,7 +391,10 @@ export function AccountsSection({
           )}
         </>
       )}
-      <form className="account-form" onSubmit={(event) => void createAccount(event)}>
+      <form
+        className="account-form"
+        onSubmit={(event) => void createAccount(event)}
+      >
         <p>Nueva cuenta (empresa)</p>
         <input
           aria-label="Nombre de la cuenta"

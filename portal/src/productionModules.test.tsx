@@ -529,9 +529,13 @@ test("el registro muestra agentes especializados con su módulo y alcance", asyn
   expect(await screen.findByText("Agente de clientes (CRM)")).toBeTruthy();
   expect(screen.getByText("Clientes (CRM)")).toBeTruthy();
   expect(
-    screen.getByText(/Alcance: leads, oportunidades, pipeline, actividades y calendario/),
+    screen.getByText(
+      /Alcance: leads, oportunidades, pipeline, actividades y calendario/,
+    ),
   ).toBeTruthy();
-  expect(screen.getByText(/list_leads, list_activities, get_pipeline_report/)).toBeTruthy();
+  expect(
+    screen.getByText(/list_leads, list_activities, get_pipeline_report/),
+  ).toBeTruthy();
 });
 
 test("el panel de supervisión muestra módulo, estado de tools y actuaciones auditadas", async () => {
@@ -718,7 +722,9 @@ test("el panel de supervisión muestra módulo, estado de tools y actuaciones au
   expect(screen.getByText("2 pendientes de aprobación humana")).toBeTruthy();
   // El digest de la supervisión usa los labels en lenguaje llano del chat
   // (el agente aparece en el resumen por agente y en la tabla de decisiones).
-  expect(screen.getAllByText("el agente de clientes (CRM)").length).toBeGreaterThan(0);
+  expect(
+    screen.getAllByText("el agente de clientes (CRM)").length,
+  ).toBeGreaterThan(0);
   expect(screen.getByText("crear un seguimiento")).toBeTruthy();
   // El objetivo humanizado enlaza a la ficha del lead en Clientes: guarda
   // el id a enfocar en sessionStorage y navega al hash del módulo.

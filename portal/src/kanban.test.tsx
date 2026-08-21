@@ -76,7 +76,11 @@ function boardFixture(overrides: Partial<PipelineBoard> = {}): PipelineBoard {
         score_signals: [
           { kind: "source", points: 10, detail: "local" },
           { kind: "age", points: 15, detail: "0.0 días" },
-          { kind: "opportunities", points: 0, detail: "sin oportunidades abiertas" },
+          {
+            kind: "opportunities",
+            points: 0,
+            detail: "sin oportunidades abiertas",
+          },
         ],
         created_at: "2026-08-16T08:00:00",
       },
@@ -103,16 +107,20 @@ function mockDataTransfer(): DataTransfer {
   } as unknown as DataTransfer;
 }
 
-async function renderKanban(overrides: {
-  board?: PipelineBoard;
-  isAdmin?: boolean;
-  captured?: CapturedRequest[];
-} = {}) {
+async function renderKanban(
+  overrides: {
+    board?: PipelineBoard;
+    isAdmin?: boolean;
+    captured?: CapturedRequest[];
+  } = {},
+) {
   const { board = boardFixture(), isAdmin = true, captured = [] } = overrides;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = requestPath(input);
     const method = init?.method ?? "GET";
-    const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined;
+    const body = init?.body
+      ? (JSON.parse(String(init.body)) as unknown)
+      : undefined;
     captured.push({ path, method, body });
     if (path === "/pipeline/board") return response(board);
     if (path === "/leads/lead-1/timeline") {
@@ -144,7 +152,10 @@ async function renderKanban(overrides: {
         stage: payload.outcome === "won" ? "won" : "lost",
         status: payload.outcome,
         probability: payload.outcome === "won" ? 100 : 0,
-        lost_reason: payload.outcome === "lost" ? (body as { lost_reason?: string }).lost_reason ?? null : null,
+        lost_reason:
+          payload.outcome === "lost"
+            ? ((body as { lost_reason?: string }).lost_reason ?? null)
+            : null,
         won_at: payload.outcome === "won" ? "2026-08-16T10:00:00" : null,
         lost_at: payload.outcome === "lost" ? "2026-08-16T10:00:00" : null,
       });
@@ -154,7 +165,11 @@ async function renderKanban(overrides: {
       return response({ id: "opp-1", stage: target, changed: true });
     }
     if (method === "PATCH" && path.startsWith("/leads/")) {
-      return response({ id: "lead-9", assigned_to: (body as { user_id: string }).user_id, changed: true });
+      return response({
+        id: "lead-9",
+        assigned_to: (body as { user_id: string }).user_id,
+        changed: true,
+      });
     }
     if (method === "PUT" && path === "/pipeline/stages") {
       return response(
@@ -227,9 +242,9 @@ test("clic en una tarjeta abre la ficha del lead con su timeline", async () => {
   await screen.findByRole("dialog", { name: "Ficha del lead" });
   expect(screen.getByText("Oportunidad creada")).toBeTruthy();
   expect(screen.getByText("Cubo 20L · 320.00 EUR")).toBeTruthy();
-  expect(
-    captured.some((req) => req.path === "/leads/lead-1/timeline"),
-  ).toBe(true);
+  expect(captured.some((req) => req.path === "/leads/lead-1/timeline")).toBe(
+    true,
+  );
 });
 
 test("asignar un lead de la cola llama al PATCH de asignación auditado", async () => {
@@ -250,9 +265,7 @@ test("asignar un lead de la cola llama al PATCH de asignación auditado", async 
 
 test("un viewer no admin no ve el editor de etapas", async () => {
   await renderKanban({ isAdmin: false });
-  expect(
-    screen.queryByRole("button", { name: "Editar etapas" }),
-  ).toBeNull();
+  expect(screen.queryByRole("button", { name: "Editar etapas" })).toBeNull();
 });
 
 test("el admin guarda el pipeline reconfigurado con PUT auditado", async () => {
@@ -263,10 +276,7 @@ test("el admin guarda el pipeline reconfigurado con PUT auditado", async () => {
   const nameInput = screen.getByLabelText("Nombre de la etapa 1");
   await user.clear(nameInput);
   await user.type(nameInput, "Contactado");
-  await user.type(
-    screen.getByLabelText("Nombre de la nueva etapa"),
-    "Cierre",
-  );
+  await user.type(screen.getByLabelText("Nombre de la nueva etapa"), "Cierre");
   await user.click(screen.getByRole("button", { name: "Añadir etapa" }));
   await user.click(screen.getByRole("button", { name: "Guardar pipeline" }));
 
@@ -277,7 +287,9 @@ test("el admin guarda el pipeline reconfigurado con PUT auditado", async () => {
     expect(put).toBeTruthy();
     expect(put?.body).toEqual({ names: ["Contactado", "Ganado", "Cierre"] });
   });
-  expect(screen.getByText("Pipeline actualizado. Cambio auditado.")).toBeTruthy();
+  expect(
+    screen.getByText("Pipeline actualizado. Cambio auditado."),
+  ).toBeTruthy();
 });
 
 test("cerrar una oportunidad como perdida envía el motivo y recarga", async () => {
@@ -286,10 +298,7 @@ test("cerrar una oportunidad como perdida envía el motivo y recarga", async () 
   await renderKanban({ captured });
   await user.click(screen.getByRole("button", { name: "Cerrar" }));
   expect(screen.getByText("Cerrar «Cubo 20L»")).toBeTruthy();
-  await user.selectOptions(
-    screen.getByLabelText("Resultado"),
-    "lost",
-  );
+  await user.selectOptions(screen.getByLabelText("Resultado"), "lost");
   await user.type(
     screen.getByLabelText("Motivo de pérdida"),
     "Precio demasiado alto",
@@ -298,7 +307,8 @@ test("cerrar una oportunidad como perdida envía el motivo y recarga", async () 
 
   await waitFor(() => {
     const post = captured.find(
-      (req) => req.method === "POST" && req.path === "/opportunities/opp-1/close",
+      (req) =>
+        req.method === "POST" && req.path === "/opportunities/opp-1/close",
     );
     expect(post).toBeTruthy();
     expect(post?.body).toEqual({

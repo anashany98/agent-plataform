@@ -368,7 +368,10 @@ export function CommerceSection({
   useEffect(() => {
     if (!active) return;
     if (
-      tryFocusRow("portal_ventas_focus", (id) => `[data-focus-id="${CSS.escape(id)}"]`)
+      tryFocusRow(
+        "portal_ventas_focus",
+        (id) => `[data-focus-id="${CSS.escape(id)}"]`,
+      )
     ) {
       return;
     }
@@ -2009,18 +2012,48 @@ const TARGET_MODULE_LINKS: Record<
   string,
   { hash: string; focusKey?: string; label: string }
 > = {
-  lead: { hash: "clientes", focusKey: "portal_clientes_focus", label: "Abrir el lead en Clientes" },
-  opportunity: { hash: "clientes", focusKey: "portal_clientes_focus", label: "Abrir la oportunidad en Clientes" },
-  contact: { hash: "clientes", focusKey: "portal_clientes_focus", label: "Abrir el contacto en Clientes" },
-  social_message: { hash: "clientes", label: "Abrir en Clientes (escucha social)" },
-  task: { hash: "clientes", focusKey: "portal_clientes_focus", label: "Abrir la tarea en Clientes" },
+  lead: {
+    hash: "clientes",
+    focusKey: "portal_clientes_focus",
+    label: "Abrir el lead en Clientes",
+  },
+  opportunity: {
+    hash: "clientes",
+    focusKey: "portal_clientes_focus",
+    label: "Abrir la oportunidad en Clientes",
+  },
+  contact: {
+    hash: "clientes",
+    focusKey: "portal_clientes_focus",
+    label: "Abrir el contacto en Clientes",
+  },
+  social_message: {
+    hash: "clientes",
+    label: "Abrir en Clientes (escucha social)",
+  },
+  task: {
+    hash: "clientes",
+    focusKey: "portal_clientes_focus",
+    label: "Abrir la tarea en Clientes",
+  },
   campaign: { hash: "clientes", label: "Abrir la campaña en Clientes" },
-  invoice: { hash: "ventas", focusKey: "portal_ventas_focus", label: "Abrir la factura en Ventas" },
-  product: { hash: "catalogo", focusKey: "portal_catalogo_focus", label: "Abrir el producto en Catálogo" },
+  invoice: {
+    hash: "ventas",
+    focusKey: "portal_ventas_focus",
+    label: "Abrir la factura en Ventas",
+  },
+  product: {
+    hash: "catalogo",
+    focusKey: "portal_catalogo_focus",
+    label: "Abrir el producto en Catálogo",
+  },
   automation: { hash: "automatizaciones", label: "Abrir en Automatizaciones" },
 };
 
-function openTarget(kind: string | undefined, focusId: string | null | undefined) {
+function openTarget(
+  kind: string | undefined,
+  focusId: string | null | undefined,
+) {
   const link = TARGET_MODULE_LINKS[kind ?? ""];
   if (!link) return;
   if (link.focusKey && focusId) {
@@ -2106,7 +2139,9 @@ export function AgentRegistrySection({
   const [safeActions, setSafeActions] = useState<Record<string, string>>({});
   const [digest, setDigest] = useState<AgentDigest | null>(null);
   const [digestError, setDigestError] = useState("");
-  const [autonomyDraft, setAutonomyDraft] = useState<Record<string, AutonomyAgent>>({});
+  const [autonomyDraft, setAutonomyDraft] = useState<
+    Record<string, AutonomyAgent>
+  >({});
   const [autonomyNotice, setAutonomyNotice] = useState("");
   const [reverting, setReverting] = useState("");
 
@@ -2417,7 +2452,9 @@ export function AgentRegistrySection({
                 <div>
                   <strong>{agent.name}</strong>
                   {agent.module_label && (
-                    <span className="badge badge-blue">{agent.module_label}</span>
+                    <span className="badge badge-blue">
+                      {agent.module_label}
+                    </span>
                   )}
                   <StatusBadge status={agent.status} />
                 </div>
@@ -2428,9 +2465,7 @@ export function AgentRegistrySection({
                     : " · integrado"}
                 </span>
                 <p>{agent.purpose}</p>
-                {agent.scope && (
-                  <p className="muted">Alcance: {agent.scope}</p>
-                )}
+                {agent.scope && <p className="muted">Alcance: {agent.scope}</p>}
                 <details>
                   <summary>Ver configuración avanzada</summary>
                   <dl>
@@ -2500,75 +2535,77 @@ export function AgentRegistrySection({
                 El ID no puede coincidir con un agente integrado. Las
                 herramientas se validan en el servidor.
               </p>
-            <div className="import-grid">
+              <div className="import-grid">
+                <label>
+                  ID del agente
+                  <input
+                    required
+                    pattern="[a-z][a-z0-9_-]{2,79}"
+                    maxLength={80}
+                    value={form.agent_id}
+                    onChange={(event) =>
+                      updateForm("agent_id", event.target.value)
+                    }
+                  />
+                </label>
+                <label>
+                  Nombre
+                  <input
+                    required
+                    minLength={3}
+                    maxLength={160}
+                    value={form.name}
+                    onChange={(event) => updateForm("name", event.target.value)}
+                  />
+                </label>
+                <label>
+                  Presupuesto mensual (USD)
+                  <input
+                    required
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={form.monthly_budget_usd}
+                    onChange={(event) =>
+                      updateForm("monthly_budget_usd", event.target.value)
+                    }
+                  />
+                </label>
+              </div>
               <label>
-                ID del agente
-                <input
-                  required
-                  pattern="[a-z][a-z0-9_-]{2,79}"
-                  maxLength={80}
-                  value={form.agent_id}
-                  onChange={(event) =>
-                    updateForm("agent_id", event.target.value)
-                  }
-                />
-              </label>
-              <label>
-                Nombre
-                <input
+                Propósito
+                <textarea
                   required
                   minLength={3}
-                  maxLength={160}
-                  value={form.name}
-                  onChange={(event) => updateForm("name", event.target.value)}
-                />
-              </label>
-              <label>
-                Presupuesto mensual (USD)
-                <input
-                  required
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={form.monthly_budget_usd}
+                  maxLength={2000}
+                  rows={3}
+                  value={form.purpose}
                   onChange={(event) =>
-                    updateForm("monthly_budget_usd", event.target.value)
+                    updateForm("purpose", event.target.value)
                   }
                 />
               </label>
-            </div>
-            <label>
-              Propósito
-              <textarea
-                required
-                minLength={3}
-                maxLength={2000}
-                rows={3}
-                value={form.purpose}
-                onChange={(event) => updateForm("purpose", event.target.value)}
-              />
-            </label>
-            <label>
-              Instrucción del sistema
-              <textarea
-                required
-                minLength={3}
-                maxLength={20000}
-                rows={5}
-                value={form.prompt}
-                onChange={(event) => updateForm("prompt", event.target.value)}
-              />
-            </label>
-            <label>
-              Herramientas permitidas (separadas por coma)
-              <input
-                maxLength={1000}
-                value={form.allowed_tools}
-                onChange={(event) =>
-                  updateForm("allowed_tools", event.target.value)
-                }
-              />
-            </label>
+              <label>
+                Instrucción del sistema
+                <textarea
+                  required
+                  minLength={3}
+                  maxLength={20000}
+                  rows={5}
+                  value={form.prompt}
+                  onChange={(event) => updateForm("prompt", event.target.value)}
+                />
+              </label>
+              <label>
+                Herramientas permitidas (separadas por coma)
+                <input
+                  maxLength={1000}
+                  value={form.allowed_tools}
+                  onChange={(event) =>
+                    updateForm("allowed_tools", event.target.value)
+                  }
+                />
+              </label>
               <button
                 className="primary-button"
                 type="submit"
@@ -2601,12 +2638,14 @@ export function AgentRegistrySection({
           icon={<Gauge size={20} />}
         />
         <p className="muted">
-          Para cada agente, decide con un interruptor si <strong>puede actuar
-          solo</strong> o si cada acción necesita tu aprobación. Lo que haga por
-          su cuenta queda registrado en el digest diario, con opción de
-          revertirlo.
+          Para cada agente, decide con un interruptor si{" "}
+          <strong>puede actuar solo</strong> o si cada acción necesita tu
+          aprobación. Lo que haga por su cuenta queda registrado en el digest
+          diario, con opción de revertirlo.
         </p>
-        {autonomyNotice && <div className="alert success">{autonomyNotice}</div>}
+        {autonomyNotice && (
+          <div className="alert success">{autonomyNotice}</div>
+        )}
         {autonomyError && <div className="alert error">{autonomyError}</div>}
         {autonomyLoading ? (
           <p className="muted">Cargando autonomía…</p>
@@ -2620,7 +2659,8 @@ export function AgentRegistrySection({
                 draft.mode !== agent.mode ||
                 draft.max_value_threshold !== agent.max_value_threshold ||
                 draft.max_actions_per_day !== agent.max_actions_per_day ||
-                draft.notify_on_deviation_only !== agent.notify_on_deviation_only ||
+                draft.notify_on_deviation_only !==
+                  agent.notify_on_deviation_only ||
                 draftActions.length !== agentActions.length ||
                 draftActions.some((action) => !agentActions.includes(action));
               const autonomous = draft.mode === "autonomous";
@@ -2696,7 +2736,9 @@ export function AgentRegistrySection({
                     </button>
                   </div>
                   <details className="autonomy-advanced">
-                    <summary>Configuración avanzada (umbral y acciones)</summary>
+                    <summary>
+                      Configuración avanzada (umbral y acciones)
+                    </summary>
                     <div className="autonomy-controls">
                       <label>
                         Umbral de valor (EUR)
@@ -2803,8 +2845,8 @@ export function AgentRegistrySection({
                   <div className="digest-by-agent">
                     {digest.by_agent.map((bucket) => (
                       <span key={bucket.agent_id}>
-                        <strong>{bucket.agent_label ?? bucket.agent_id}</strong>:{" "}
-                        {bucket.total} decis.
+                        <strong>{bucket.agent_label ?? bucket.agent_id}</strong>
+                        : {bucket.total} decis.
                         {bucket.deviations > 0 && (
                           <span className="badge badge-red">
                             {bucket.deviations} desv.
@@ -2834,10 +2876,14 @@ export function AgentRegistrySection({
                     {digest.decisions.map((decision) => (
                       <tr key={decision.id}>
                         <td>
-                          <code>{decision.agent_label ?? decision.agent_id}</code>
+                          <code>
+                            {decision.agent_label ?? decision.agent_id}
+                          </code>
                         </td>
                         <td>
-                          <code>{decision.action_label ?? decision.action_type}</code>
+                          <code>
+                            {decision.action_label ?? decision.action_type}
+                          </code>
                         </td>
                         <td className="muted">
                           {(() => {
@@ -2852,7 +2898,10 @@ export function AgentRegistrySection({
                                 title={link.label}
                                 onClick={(event) => {
                                   event.preventDefault();
-                                  openTarget(decision.target_kind, decision.target_focus_id);
+                                  openTarget(
+                                    decision.target_kind,
+                                    decision.target_focus_id,
+                                  );
                                 }}
                               >
                                 {label}
@@ -2927,120 +2976,131 @@ export function AgentRegistrySection({
             </summary>
             <div className="resource-list agent-list">
               {supervision.map((agent) => (
-              <article className="resource-card" key={agent.agent_id}>
-                <div>
-                  <strong>{agent.name}</strong>
-                  {agent.module_label && (
-                    <span className="badge badge-blue">{agent.module_label}</span>
-                  )}
-                  <StatusBadge status={agent.status} />
-                </div>
-                <span className="muted">
-                  {agent.agent_id} · {agent.autonomy_level ?? "—"} ·{" "}
-                  {formatActivityAt(agent.summary.last_activity_at)}
-                </span>
-                <p className="muted">Alcance: {agent.scope ?? "—"}</p>
-                <div className="supervision-stats">
-                  <span className="badge badge-green">
-                    {agent.summary.calls} llamadas
+                <article className="resource-card" key={agent.agent_id}>
+                  <div>
+                    <strong>{agent.name}</strong>
+                    {agent.module_label && (
+                      <span className="badge badge-blue">
+                        {agent.module_label}
+                      </span>
+                    )}
+                    <StatusBadge status={agent.status} />
+                  </div>
+                  <span className="muted">
+                    {agent.agent_id} · {agent.autonomy_level ?? "—"} ·{" "}
+                    {formatActivityAt(agent.summary.last_activity_at)}
                   </span>
-                  <span className="badge">✓ {agent.summary.success}</span>
-                  <span className="badge badge-orange">
-                    ✗ {agent.summary.denied}
-                  </span>
-                  <span className="badge badge-red">! {agent.summary.errors}</span>
-                  <span className="badge">
-                    {agent.authorized_tools.length} tools autorizadas
-                  </span>
-                </div>
-                <details>
-                  <summary>Estado de las tools</summary>
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Herramienta</th>
-                        <th>Kind</th>
-                        <th>Acceso</th>
-                        <th>Llamadas</th>
-                        <th>✓</th>
-                        <th>✗</th>
-                        <th>!</th>
-                        <th>Última</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {agent.tools.map((tool) => (
-                        <tr key={tool.name}>
-                          <td>
-                            <code>{tool.name}</code>
-                            {!tool.declared && (
-                              <span className="badge badge-red">no declarada</span>
-                            )}
-                          </td>
-                          <td>
-                            <span className="badge">{tool.kind}</span>
-                          </td>
-                          <td>
-                            {tool.authorized ? (
-                              <span className="badge badge-green">autorizada</span>
-                            ) : (
-                              <span className="badge badge-orange">denegada</span>
-                            )}
-                          </td>
-                          <td>{tool.calls}</td>
-                          <td>{tool.success}</td>
-                          <td>{tool.denied}</td>
-                          <td>{tool.errors}</td>
-                          <td className="muted">
-                            {tool.last_status ? (
-                              <>
-                                {tool.last_status}{" "}
-                                {formatActivityAt(tool.last_at)}
-                              </>
-                            ) : (
-                              "sin uso"
-                            )}
-                          </td>
+                  <p className="muted">Alcance: {agent.scope ?? "—"}</p>
+                  <div className="supervision-stats">
+                    <span className="badge badge-green">
+                      {agent.summary.calls} llamadas
+                    </span>
+                    <span className="badge">✓ {agent.summary.success}</span>
+                    <span className="badge badge-orange">
+                      ✗ {agent.summary.denied}
+                    </span>
+                    <span className="badge badge-red">
+                      ! {agent.summary.errors}
+                    </span>
+                    <span className="badge">
+                      {agent.authorized_tools.length} tools autorizadas
+                    </span>
+                  </div>
+                  <details>
+                    <summary>Estado de las tools</summary>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>Herramienta</th>
+                          <th>Kind</th>
+                          <th>Acceso</th>
+                          <th>Llamadas</th>
+                          <th>✓</th>
+                          <th>✗</th>
+                          <th>!</th>
+                          <th>Última</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </details>
-                <details>
-                  <summary>Últimas actuaciones auditadas</summary>
-                  {agent.recent_actions.length === 0 ? (
-                    <p className="muted">
-                      Sin actuaciones: el agente aún no ha invocado herramientas.
-                    </p>
-                  ) : (
-                    <ul className="supervision-actions">
-                      {agent.recent_actions.map((action, index) => (
-                        <li key={`${action.timestamp}-${index}`}>
-                          <span
-                            className={`badge ${
-                              action.status === "success"
-                                ? "badge-green"
-                                : action.status === "denied"
-                                  ? "badge-orange"
-                                  : "badge-red"
-                            }`}
-                          >
-                            {action.status}
-                          </span>{" "}
-                          <code>{action.tool}</code>{" "}
-                          <span className="muted">
-                            {formatActivityAt(action.timestamp)}
-                          </span>
-                          {action.detail && (
-                            <p className="muted">{action.detail}</p>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </details>
-              </article>
-            ))}
+                      </thead>
+                      <tbody>
+                        {agent.tools.map((tool) => (
+                          <tr key={tool.name}>
+                            <td>
+                              <code>{tool.name}</code>
+                              {!tool.declared && (
+                                <span className="badge badge-red">
+                                  no declarada
+                                </span>
+                              )}
+                            </td>
+                            <td>
+                              <span className="badge">{tool.kind}</span>
+                            </td>
+                            <td>
+                              {tool.authorized ? (
+                                <span className="badge badge-green">
+                                  autorizada
+                                </span>
+                              ) : (
+                                <span className="badge badge-orange">
+                                  denegada
+                                </span>
+                              )}
+                            </td>
+                            <td>{tool.calls}</td>
+                            <td>{tool.success}</td>
+                            <td>{tool.denied}</td>
+                            <td>{tool.errors}</td>
+                            <td className="muted">
+                              {tool.last_status ? (
+                                <>
+                                  {tool.last_status}{" "}
+                                  {formatActivityAt(tool.last_at)}
+                                </>
+                              ) : (
+                                "sin uso"
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </details>
+                  <details>
+                    <summary>Últimas actuaciones auditadas</summary>
+                    {agent.recent_actions.length === 0 ? (
+                      <p className="muted">
+                        Sin actuaciones: el agente aún no ha invocado
+                        herramientas.
+                      </p>
+                    ) : (
+                      <ul className="supervision-actions">
+                        {agent.recent_actions.map((action, index) => (
+                          <li key={`${action.timestamp}-${index}`}>
+                            <span
+                              className={`badge ${
+                                action.status === "success"
+                                  ? "badge-green"
+                                  : action.status === "denied"
+                                    ? "badge-orange"
+                                    : "badge-red"
+                              }`}
+                            >
+                              {action.status}
+                            </span>{" "}
+                            <code>{action.tool}</code>{" "}
+                            <span className="muted">
+                              {formatActivityAt(action.timestamp)}
+                            </span>
+                            {action.detail && (
+                              <p className="muted">{action.detail}</p>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </details>
+                </article>
+              ))}
             </div>
           </details>
         )}

@@ -94,8 +94,11 @@ function Card({
   onOpenDetail: (leadId: string) => void;
   onClose: (card: KanbanCard) => void;
 }) {
-  const terminal = card.stage === "won" || card.stage === "lost" ||
-    card.status === "won" || card.status === "lost";
+  const terminal =
+    card.stage === "won" ||
+    card.stage === "lost" ||
+    card.status === "won" ||
+    card.status === "lost";
   return (
     <div
       className={`kanban-card${dragging ? " dragging" : ""}${terminal ? " terminal" : ""}`}
@@ -210,18 +213,17 @@ export function KanbanSection({
     setActionError("");
     setMovingId(card.id);
     try {
-      const result = await apiRequest<{ id: string; stage: string; changed: boolean }>(
-        `/opportunities/${card.id}`,
-        {
-          token,
-          method: "PATCH",
-          body: JSON.stringify({ stage: targetStage }),
-        },
-      );
+      const result = await apiRequest<{
+        id: string;
+        stage: string;
+        changed: boolean;
+      }>(`/opportunities/${card.id}`, {
+        token,
+        method: "PATCH",
+        body: JSON.stringify({ stage: targetStage }),
+      });
       if (result.changed) {
-        flash(
-          `«${card.name}» movida a ${targetStage}. Cambio auditado.`,
-        );
+        flash(`«${card.name}» movida a ${targetStage}. Cambio auditado.`);
       }
       await loadBoard();
     } catch (err) {
@@ -241,10 +243,7 @@ export function KanbanSection({
     event.dataTransfer.setData("text/plain", card.id);
   }
 
-  function onDropOnStage(
-    event: DragEvent<HTMLDivElement>,
-    stageKey: string,
-  ) {
+  function onDropOnStage(event: DragEvent<HTMLDivElement>, stageKey: string) {
     event.preventDefault();
     setDropTarget(null);
     if (dragFrom) void moveCard(dragFrom, stageKey);
@@ -311,13 +310,12 @@ export function KanbanSection({
         method: "POST",
         body: JSON.stringify({
           outcome: closeOutcome,
-          lost_reason: closeOutcome === "lost" && closeReason.trim()
-            ? closeReason.trim()
-            : null,
-          probability:
-            closeProbability.trim() !== ""
-              ? Number(closeProbability)
+          lost_reason:
+            closeOutcome === "lost" && closeReason.trim()
+              ? closeReason.trim()
               : null,
+          probability:
+            closeProbability.trim() !== "" ? Number(closeProbability) : null,
         }),
       });
       flash(
@@ -407,7 +405,10 @@ export function KanbanSection({
       )}
 
       {editing && board !== null && (
-        <form className="kanban-editor" onSubmit={(event) => void saveStages(event)}>
+        <form
+          className="kanban-editor"
+          onSubmit={(event) => void saveStages(event)}
+        >
           <p>
             Nombres de las etapas en orden. Las claves estables se conservan y
             las oportunidades de etapas eliminadas vuelven a la primera.
@@ -434,7 +435,10 @@ export function KanbanSection({
                     aria-label={`Subir etapa ${name}`}
                     onClick={() => {
                       const next = [...editNames];
-                      [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                      [next[index - 1], next[index]] = [
+                        next[index],
+                        next[index - 1],
+                      ];
                       setEditNames(next);
                     }}
                   >
@@ -447,7 +451,10 @@ export function KanbanSection({
                     aria-label={`Bajar etapa ${name}`}
                     onClick={() => {
                       const next = [...editNames];
-                      [next[index + 1], next[index]] = [next[index], next[index + 1]];
+                      [next[index + 1], next[index]] = [
+                        next[index],
+                        next[index + 1],
+                      ];
                       setEditNames(next);
                     }}
                   >
@@ -490,7 +497,11 @@ export function KanbanSection({
             </button>
           </div>
           <div className="kanban-editor-save">
-            <button type="submit" className="primary-button" disabled={savingStages}>
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={savingStages}
+            >
               {savingStages ? "Guardando…" : "Guardar pipeline"}
             </button>
             <button
@@ -507,7 +518,11 @@ export function KanbanSection({
 
       {!editing && board !== null && (
         <>
-          <div className="kanban-board" role="list" aria-label="Tablero de etapas">
+          <div
+            className="kanban-board"
+            role="list"
+            aria-label="Tablero de etapas"
+          >
             {columns.map((stage) => (
               <div
                 key={stage.key}
@@ -527,9 +542,7 @@ export function KanbanSection({
               >
                 <div className="kanban-column-head">
                   <strong>{stage.name}</strong>
-                  <span className="counter">
-                    {stage.opportunities.length}
-                  </span>
+                  <span className="counter">{stage.opportunities.length}</span>
                   <span
                     className="kanban-column-prob"
                     title="Probabilidad de cierre de la etapa"
@@ -679,7 +692,9 @@ export function KanbanSection({
             Resultado
             <select
               value={closeOutcome}
-              onChange={(e) => setCloseOutcome(e.target.value as "won" | "lost")}
+              onChange={(e) =>
+                setCloseOutcome(e.target.value as "won" | "lost")
+              }
             >
               <option value="won">Ganada</option>
               <option value="lost">Perdida</option>
@@ -714,7 +729,11 @@ export function KanbanSection({
             />
           </label>
           <div className="close-modal-actions">
-            <button type="submit" className="primary-button" disabled={savingClose}>
+            <button
+              type="submit"
+              className="primary-button"
+              disabled={savingClose}
+            >
               {savingClose ? "Cerrando…" : "Confirmar cierre"}
             </button>
             <button

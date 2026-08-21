@@ -130,7 +130,11 @@ export function TodaySection({
     );
   }
   if (!data) {
-    return <p className="muted" role="status">Cargando qué necesita tu atención…</p>;
+    return (
+      <p className="muted" role="status">
+        Cargando qué necesita tu atención…
+      </p>
+    );
   }
 
   const cards = data.cards;
@@ -165,8 +169,7 @@ export function TodaySection({
             key: "urgent_messages" as const,
             icon: <MessageSquare size={20} />,
             title: "Mensajes urgentes",
-            subtitle:
-              "Quejas o leads con alta urgencia que esperan respuesta.",
+            subtitle: "Quejas o leads con alta urgencia que esperan respuesta.",
             cta: "Ver bandeja",
             onClick: () => openClientesTab("social"),
           },
@@ -203,7 +206,11 @@ export function TodaySection({
   );
 
   return (
-    <section id="hoy" className="today" aria-label="Qué necesita tu atención hoy">
+    <section
+      id="hoy"
+      className="today"
+      aria-label="Qué necesita tu atención hoy"
+    >
       <div className="today-intro">
         <h2>Hoy</h2>
         <p className="muted">

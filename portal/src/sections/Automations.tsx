@@ -50,12 +50,14 @@ const ENGINE_CARDS: Array<{
   {
     key: "quote_expiry",
     title: "Recordatorios de presupuesto",
-    description: "Recuerda a los clientes que su presupuesto está a punto de caducar.",
+    description:
+      "Recuerda a los clientes que su presupuesto está a punto de caducar.",
   },
   {
     key: "dunning",
     title: "Avisos de cobro vencido",
-    description: "Envía recordatorios de facturas sin pagar, sin cobrar nada por su cuenta.",
+    description:
+      "Envía recordatorios de facturas sin pagar, sin cobrar nada por su cuenta.",
   },
   {
     key: "low_stock",
@@ -138,10 +140,14 @@ export function AutomationsSection({
       setRunResult(
         `Ejecutado: ${total} aviso(s) enviado(s), ${failures} error(es).`,
       );
-      const fresh = await apiRequest<AutomationsStatus>("/automations/status", { token });
+      const fresh = await apiRequest<AutomationsStatus>("/automations/status", {
+        token,
+      });
       setStatus(fresh);
     } catch {
-      setRunResult("No se pudo ejecutar ahora. Revisa la conexión e inténtalo de nuevo.");
+      setRunResult(
+        "No se pudo ejecutar ahora. Revisa la conexión e inténtalo de nuevo.",
+      );
     } finally {
       setRunning(false);
     }
@@ -171,7 +177,11 @@ export function AutomationsSection({
       : "nada pendiente";
 
   return (
-    <section id="automatizaciones" className="panel" aria-label="Automatizaciones">
+    <section
+      id="automatizaciones"
+      className="panel"
+      aria-label="Automatizaciones"
+    >
       <div className="panel-heading">
         <div>
           <p>Trabajo automático</p>
@@ -211,62 +221,64 @@ export function AutomationsSection({
       {canWrite && (
         <form className="form-actions" onSubmit={runSweep}>
           <button type="submit" className="primary-button" disabled={running}>
-            {running ? <RefreshCw className="spin" size={16} /> : <Play size={16} />}
+            {running ? (
+              <RefreshCw className="spin" size={16} />
+            ) : (
+              <Play size={16} />
+            )}
             {running ? "Ejecutando…" : "Ejecutar ahora"}
           </button>
           {runResult && <span className="muted">{runResult}</span>}
         </form>
       )}
 
-      {canWrite &&
-        status?.dead_letter &&
-        status.dead_letter.length > 0 && (
-          <div className="dlq-section">
-            <h3>Envíos que fallaron</h3>
-            <p className="muted">
-              Estos envíos no pudieron completarse. Puedes reintentarlos con
-              un clic; si el problema sigue, revisa la integración señalada en
-              el motivo.
-            </p>
-            {queueNotice && (
-              <div className="notice-box" role="status">
-                {queueNotice}
-              </div>
-            )}
-            <div className="resource-list">
-              {status.dead_letter.map((entry) => (
-                <article className="resource-card" key={entry.id}>
-                  <div>
-                    <strong>{entry.topic_label}</strong>
-                    <span className="badge badge-red">fallado</span>
-                  </div>
-                  <p className="muted">{entry.reason}</p>
-                  <span className="muted">
-                    Se intentó {entry.attempt_count} de {entry.max_attempts}{" "}
-                    veces
-                    {entry.created_at
-                      ? ` · ${formatLastRun(entry.created_at)}`
-                      : ""}
-                  </span>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    disabled={retrying === entry.id}
-                    onClick={() => void retryMessage(entry.id)}
-                  >
-                    {retrying === entry.id ? "Reencolando…" : "Reintentar"}
-                  </button>
-                </article>
-              ))}
+      {canWrite && status?.dead_letter && status.dead_letter.length > 0 && (
+        <div className="dlq-section">
+          <h3>Envíos que fallaron</h3>
+          <p className="muted">
+            Estos envíos no pudieron completarse. Puedes reintentarlos con un
+            clic; si el problema sigue, revisa la integración señalada en el
+            motivo.
+          </p>
+          {queueNotice && (
+            <div className="notice-box" role="status">
+              {queueNotice}
             </div>
+          )}
+          <div className="resource-list">
+            {status.dead_letter.map((entry) => (
+              <article className="resource-card" key={entry.id}>
+                <div>
+                  <strong>{entry.topic_label}</strong>
+                  <span className="badge badge-red">fallado</span>
+                </div>
+                <p className="muted">{entry.reason}</p>
+                <span className="muted">
+                  Se intentó {entry.attempt_count} de {entry.max_attempts} veces
+                  {entry.created_at
+                    ? ` · ${formatLastRun(entry.created_at)}`
+                    : ""}
+                </span>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={retrying === entry.id}
+                  onClick={() => void retryMessage(entry.id)}
+                >
+                  {retrying === entry.id ? "Reencolando…" : "Reintentar"}
+                </button>
+              </article>
+            ))}
           </div>
-        )}
+        </div>
+      )}
 
       <div className="empty-state">
         <p>
           <strong>Envíos pendientes:</strong> {queue}.{" "}
-          <strong>Tareas programadas:</strong> {status?.scheduled_tasks.active ?? 0}{" "}
-          activas, {status?.scheduled_tasks.paused ?? 0} pausadas.
+          <strong>Tareas programadas:</strong>{" "}
+          {status?.scheduled_tasks.active ?? 0} activas,{" "}
+          {status?.scheduled_tasks.paused ?? 0} pausadas.
         </p>
         <p className="muted">
           El diseñador de flujos externo (Activepieces) no forma parte de la

@@ -21,7 +21,9 @@ function requestPath(input: RequestInfo | URL): string {
   return `${url.pathname}${url.search}`.replace(/^\/api\/bridge/, "");
 }
 
-function fieldFixture(overrides: Partial<CustomFieldDefinition> = {}): CustomFieldDefinition {
+function fieldFixture(
+  overrides: Partial<CustomFieldDefinition> = {},
+): CustomFieldDefinition {
   return {
     id: "field-1",
     key: "sector",
@@ -45,11 +47,16 @@ async function renderSection(
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = requestPath(input);
     const method = init?.method ?? "GET";
-    const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined;
+    const body = init?.body
+      ? (JSON.parse(String(init.body)) as unknown)
+      : undefined;
     captured.push({ path, method, body });
     if (method === "GET" && path === "/custom-fields") return response(fields);
     if (method === "POST" && path === "/custom-fields") {
-      return response(fieldFixture(body as Partial<CustomFieldDefinition>), 201);
+      return response(
+        fieldFixture(body as Partial<CustomFieldDefinition>),
+        201,
+      );
     }
     if (method === "PATCH" && path.startsWith("/custom-fields/")) {
       return response(fieldFixture(body as Partial<CustomFieldDefinition>));
@@ -79,7 +86,9 @@ test("lista las definiciones de campos con tipo y visibilidad", async () => {
   expect(screen.getAllByText("Texto").length).toBeGreaterThanOrEqual(1);
   expect(screen.getByText(/Prioridad/)).toBeTruthy();
   expect(screen.getByText(/Alta, Baja/)).toBeTruthy();
-  expect(screen.getAllByText("Operadores o superior").length).toBeGreaterThanOrEqual(1);
+  expect(
+    screen.getAllByText("Operadores o superior").length,
+  ).toBeGreaterThanOrEqual(1);
 });
 
 test("crear un campo envía el POST con la definición y audita", async () => {
@@ -92,12 +101,16 @@ test("crear un campo envía el POST con la definición y audita", async () => {
   );
 
   await user.type(screen.getByLabelText("Clave del nuevo campo"), "zona");
-  await user.type(screen.getByLabelText("Etiqueta del nuevo campo"), "Zona geográfica");
+  await user.type(
+    screen.getByLabelText("Etiqueta del nuevo campo"),
+    "Zona geográfica",
+  );
   await user.click(screen.getByRole("button", { name: "Crear campo" }));
 
   await waitFor(() => {
     const post = captured.find(
-      (request) => request.method === "POST" && request.path === "/custom-fields",
+      (request) =>
+        request.method === "POST" && request.path === "/custom-fields",
     );
     expect(post).toBeTruthy();
     expect(post?.body).toMatchObject({
@@ -119,7 +132,8 @@ test("desactivar un campo envía el PATCH is_active=false", async () => {
 
   await waitFor(() => {
     const patch = captured.find(
-      (request) => request.method === "PATCH" && request.path === "/custom-fields/field-1",
+      (request) =>
+        request.method === "PATCH" && request.path === "/custom-fields/field-1",
     );
     expect(patch).toBeTruthy();
     expect(patch?.body).toMatchObject({ is_active: false });
@@ -133,7 +147,10 @@ test("un campo select muestra el editor de opciones al crearlo", async () => {
   await waitFor(() =>
     expect(screen.getByText(/Aún no hay campos personalizados/)).toBeTruthy(),
   );
-  await user.selectOptions(screen.getByLabelText("Tipo del nuevo campo"), "select");
+  await user.selectOptions(
+    screen.getByLabelText("Tipo del nuevo campo"),
+    "select",
+  );
   expect(
     screen.getByLabelText("Opciones del campo select separadas por comas"),
   ).toBeTruthy();

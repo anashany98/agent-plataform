@@ -48,7 +48,9 @@ export function EmailSection({
   refreshRevision: number;
 }) {
   const [templates, setTemplates] = useState<EmailTemplate[] | null>(null);
-  const [variables, setVariables] = useState<TemplateListResponse["variables"]>([]);
+  const [variables, setVariables] = useState<TemplateListResponse["variables"]>(
+    [],
+  );
   const [, setSettings] = useState<EmailSettings | null>(null);
   const [events, setEvents] = useState<TrackingEvent[] | null>(null);
   const [error, setError] = useState("");
@@ -74,7 +76,9 @@ export function EmailSection({
       const [templateData, settingsData, eventsData] = await Promise.all([
         apiRequest<TemplateListResponse>("/email/templates", { token }),
         apiRequest<EmailSettings>("/email/settings", { token }),
-        apiRequest<{ items: TrackingEvent[] }>("/email/tracking/events", { token }),
+        apiRequest<{ items: TrackingEvent[] }>("/email/tracking/events", {
+          token,
+        }),
       ]);
       setTemplates(templateData.items);
       setVariables(templateData.variables ?? []);
@@ -84,7 +88,9 @@ export function EmailSection({
       setEvents(eventsData.items);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "No se pudieron cargar los datos de email",
+        err instanceof Error
+          ? err.message
+          : "No se pudieron cargar los datos de email",
       );
     }
   }
@@ -164,7 +170,9 @@ export function EmailSection({
         method: "PATCH",
         body: JSON.stringify({ is_active: !template.is_active }),
       });
-      flash(template.is_active ? "Plantilla desactivada." : "Plantilla activada.");
+      flash(
+        template.is_active ? "Plantilla desactivada." : "Plantilla activada.",
+      );
       await loadAll();
     } catch (err) {
       setActionError(
@@ -179,10 +187,13 @@ export function EmailSection({
       return;
     }
     try {
-      await apiRequest<{ deleted: boolean }>(`/email/templates/${template.id}`, {
-        token,
-        method: "DELETE",
-      });
+      await apiRequest<{ deleted: boolean }>(
+        `/email/templates/${template.id}`,
+        {
+          token,
+          method: "DELETE",
+        },
+      );
       flash("Plantilla eliminada. Cambio auditado.");
       await loadAll();
     } catch (err) {
@@ -232,11 +243,17 @@ export function EmailSection({
         method: "PUT",
         body: JSON.stringify({ signature, tracking_enabled: trackingEnabled }),
       });
-      setSettings({ signature, tracking_enabled: trackingEnabled, updated_at: null });
+      setSettings({
+        signature,
+        tracking_enabled: trackingEnabled,
+        updated_at: null,
+      });
       flash("Configuración de email guardada. Cambio auditado.");
     } catch (err) {
       setActionError(
-        err instanceof Error ? err.message : "No se pudo guardar la configuración",
+        err instanceof Error
+          ? err.message
+          : "No se pudo guardar la configuración",
       );
     } finally {
       setSavingSettings(false);
@@ -293,8 +310,9 @@ export function EmailSection({
                   <tr>
                     <td colSpan={5}>
                       <div className="empty-state">
-                        Aún no hay plantillas. Crea la primera con el formulario;
-                        el envío usa el pipeline existente (SMTP o spool local).
+                        Aún no hay plantillas. Crea la primera con el
+                        formulario; el envío usa el pipeline existente (SMTP o
+                        spool local).
                       </div>
                     </td>
                   </tr>
@@ -461,7 +479,10 @@ export function EmailSection({
         className="kanban-editor"
         onSubmit={(event) => void saveSettings(event)}
       >
-        <p>Firma de instalación (se añade al pie de los correos sin firma propia).</p>
+        <p>
+          Firma de instalación (se añade al pie de los correos sin firma
+          propia).
+        </p>
         <textarea
           value={signature}
           aria-label="Firma de instalación"
@@ -478,7 +499,11 @@ export function EmailSection({
             />{" "}
             Tracking de apertura y clics activo
           </label>
-          <button type="submit" className="primary-button" disabled={savingSettings}>
+          <button
+            type="submit"
+            className="primary-button"
+            disabled={savingSettings}
+          >
             {savingSettings ? "Guardando…" : "Guardar configuración"}
           </button>
         </div>

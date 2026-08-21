@@ -231,7 +231,9 @@ export const CeoChat = forwardRef<CeoChatHandle, CeoChatProps>(function CeoChat(
       }
       if (transcript.trim()) {
         setDraft((current) =>
-          current.trim() ? `${current.trim()} ${transcript.trim()}` : transcript,
+          current.trim()
+            ? `${current.trim()} ${transcript.trim()}`
+            : transcript,
         );
       }
     };
@@ -239,9 +241,11 @@ export const CeoChat = forwardRef<CeoChatHandle, CeoChatProps>(function CeoChat(
       recognizerRef.current = null;
       setListening(false);
       const messages: Record<string, string> = {
-        "not-allowed": "No se pudo usar el micrófono: revisa los permisos del navegador.",
+        "not-allowed":
+          "No se pudo usar el micrófono: revisa los permisos del navegador.",
         "service-not-allowed": "El navegador bloqueó el acceso al micrófono.",
-        "no-speech": "No se detectó voz. Inténtalo de nuevo o escribe la pregunta.",
+        "no-speech":
+          "No se detectó voz. Inténtalo de nuevo o escribe la pregunta.",
         network: "El reconocimiento de voz no está disponible sin conexión.",
       };
       setVoiceError(

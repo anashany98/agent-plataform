@@ -60,16 +60,22 @@ async function renderSection(
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = requestPath(input);
     const method = init?.method ?? "GET";
-    const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined;
+    const body = init?.body
+      ? (JSON.parse(String(init.body)) as unknown)
+      : undefined;
     captured.push({ path, method, body });
     if (method === "GET" && path === "/webhooks/subscriptions") {
       return response({ items: subscriptions, event_catalog: EVENT_CATALOG });
     }
     if (method === "POST" && path === "/webhooks/subscriptions") {
-      return response(subscriptionFixture(body as Partial<WebhookSubscription>));
+      return response(
+        subscriptionFixture(body as Partial<WebhookSubscription>),
+      );
     }
     if (method === "PATCH" && path.startsWith("/webhooks/subscriptions/")) {
-      return response(subscriptionFixture(body as Partial<WebhookSubscription>));
+      return response(
+        subscriptionFixture(body as Partial<WebhookSubscription>),
+      );
     }
     if (method === "DELETE" && path.startsWith("/webhooks/subscriptions/")) {
       return response({ deleted: true });
@@ -99,7 +105,9 @@ test("lista las suscripciones con estado y oculta el secreto completo", async ()
   expect(screen.getByText("Etapas")).toBeTruthy();
   // «Cambio de etapa» aparece en la fila de la suscripción y en el
   // formulario de alta (checkbox), así que se admiten varias coincidencias.
-  expect(screen.getAllByText(/Cambio de etapa/).length).toBeGreaterThanOrEqual(1);
+  expect(screen.getAllByText(/Cambio de etapa/).length).toBeGreaterThanOrEqual(
+    1,
+  );
   // El secreto completo nunca se muestra; solo el prefijo.
   expect(screen.queryByText(/subs.*subs/)).toBeFalsy();
   expect(screen.getAllByText(/firma subs…/).length).toBeGreaterThanOrEqual(1);
@@ -116,15 +124,25 @@ test("crear una suscripción envía el POST con nombre, URL, secreto y eventos",
     expect(screen.getByText(/Aún no hay suscripciones/)).toBeTruthy(),
   );
 
-  await user.type(screen.getByLabelText("Nombre de la nueva suscripción"), "CRM B");
-  await user.type(screen.getByLabelText("URL de la nueva suscripción"), "https://b.example/hook");
-  await user.type(screen.getByLabelText("Secreto HMAC de la nueva suscripción"), "super-secreto-16ch");
+  await user.type(
+    screen.getByLabelText("Nombre de la nueva suscripción"),
+    "CRM B",
+  );
+  await user.type(
+    screen.getByLabelText("URL de la nueva suscripción"),
+    "https://b.example/hook",
+  );
+  await user.type(
+    screen.getByLabelText("Secreto HMAC de la nueva suscripción"),
+    "super-secreto-16ch",
+  );
   await user.click(screen.getByLabelText("Cambio de etapa"));
   await user.click(screen.getByRole("button", { name: "Crear suscripción" }));
 
   await waitFor(() => {
     const post = captured.find(
-      (request) => request.method === "POST" && request.path === "/webhooks/subscriptions",
+      (request) =>
+        request.method === "POST" && request.path === "/webhooks/subscriptions",
     );
     expect(post).toBeTruthy();
     expect(post?.body).toMatchObject({
@@ -147,7 +165,8 @@ test("probar una suscripción encola el evento de prueba", async () => {
   await waitFor(() => {
     const post = captured.find(
       (request) =>
-        request.method === "POST" && request.path === "/webhooks/subscriptions/sub-1/test",
+        request.method === "POST" &&
+        request.path === "/webhooks/subscriptions/sub-1/test",
     );
     expect(post).toBeTruthy();
   });
@@ -167,20 +186,20 @@ test("desactivar y eliminar una suscripción envían PATCH y DELETE", async () =
   await waitFor(() => {
     const patch = captured.find(
       (request) =>
-        request.method === "PATCH" && request.path === "/webhooks/subscriptions/sub-1",
+        request.method === "PATCH" &&
+        request.path === "/webhooks/subscriptions/sub-1",
     );
     expect(patch).toBeTruthy();
     expect(patch?.body).toMatchObject({ is_active: false });
   });
 
-  const confirmSpy = vi
-    .spyOn(window, "confirm")
-    .mockReturnValue(true);
+  const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
   await user.click(screen.getByRole("button", { name: "Eliminar" }));
   await waitFor(() => {
     const del = captured.find(
       (request) =>
-        request.method === "DELETE" && request.path === "/webhooks/subscriptions/sub-1",
+        request.method === "DELETE" &&
+        request.path === "/webhooks/subscriptions/sub-1",
     );
     expect(del).toBeTruthy();
   });
@@ -200,8 +219,17 @@ test("el formulario exige al menos un evento y un secreto de 16 caracteres", asy
   }) as HTMLButtonElement;
   expect(createButton.disabled).toBe(true);
 
-  await user.type(screen.getByLabelText("Nombre de la nueva suscripción"), "Hook");
-  await user.type(screen.getByLabelText("URL de la nueva suscripción"), "https://x.example/h");
-  await user.type(screen.getByLabelText("Secreto HMAC de la nueva suscripción"), "corto");
+  await user.type(
+    screen.getByLabelText("Nombre de la nueva suscripción"),
+    "Hook",
+  );
+  await user.type(
+    screen.getByLabelText("URL de la nueva suscripción"),
+    "https://x.example/h",
+  );
+  await user.type(
+    screen.getByLabelText("Secreto HMAC de la nueva suscripción"),
+    "corto",
+  );
   expect(createButton.disabled).toBe(true);
 });

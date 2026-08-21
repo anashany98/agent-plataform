@@ -124,7 +124,6 @@ export function ActivitiesSection({
     return () => {
       cancelled = true;
     };
-     
   }, [token]);
 
   async function createActivity(event: FormEvent) {
@@ -195,10 +194,10 @@ export function ActivitiesSection({
     setActionResult("");
     setReminding(activity.id);
     try {
-      const result = await apiRequest<{ delivery_status: string; provider: string }>(
-        `/activities/${activity.id}/remind`,
-        { token, method: "POST" },
-      );
+      const result = await apiRequest<{
+        delivery_status: string;
+        provider: string;
+      }>(`/activities/${activity.id}/remind`, { token, method: "POST" });
       setActionResult(
         result.delivery_status === "queued_for_manual_delivery"
           ? `Recordatorio de «${activity.title}» en cola de entrega (${result.provider}).`
@@ -207,7 +206,9 @@ export function ActivitiesSection({
       await loadActivities();
     } catch (err) {
       setActionError(
-        err instanceof Error ? err.message : "No se pudo enviar el recordatorio",
+        err instanceof Error
+          ? err.message
+          : "No se pudo enviar el recordatorio",
       );
     } finally {
       setReminding(null);
@@ -319,9 +320,7 @@ export function ActivitiesSection({
                     )}
                   </td>
                   <td>
-                    <span
-                      className={`status-pill status-${activity.status}`}
-                    >
+                    <span className={`status-pill status-${activity.status}`}>
                       {STATUS_LABELS[activity.status] ?? activity.status}
                     </span>
                   </td>
@@ -348,7 +347,9 @@ export function ActivitiesSection({
                         <button
                           type="button"
                           className="secondary-button"
-                          onClick={() => void changeStatus(activity, "cancelled")}
+                          onClick={() =>
+                            void changeStatus(activity, "cancelled")
+                          }
                         >
                           Cancelar
                         </button>
@@ -430,7 +431,9 @@ export function ActivitiesSection({
               type="email"
               value={form.remind_email}
               placeholder="Por defecto: email del lead"
-              onChange={(e) => setForm({ ...form, remind_email: e.target.value })}
+              onChange={(e) =>
+                setForm({ ...form, remind_email: e.target.value })
+              }
             />
           </label>
           <label>

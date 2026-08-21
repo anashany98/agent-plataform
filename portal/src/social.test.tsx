@@ -93,23 +93,32 @@ async function renderSection(
         headers: { "Content-Type": "application/json" },
       });
     }
-    if (method === "POST" && /^\/social\/messages\/[^/]+\/dismiss$/.test(path)) {
-      return new Response(JSON.stringify({ id: "msg-1", status: "dismissed" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+    if (
+      method === "POST" &&
+      /^\/social\/messages\/[^/]+\/dismiss$/.test(path)
+    ) {
+      return new Response(
+        JSON.stringify({ id: "msg-1", status: "dismissed" }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     }
     if (method === "PATCH" && /^\/social\/channels\/[^/]+$/.test(path)) {
-      return new Response(JSON.stringify({ ...CHANNEL_FIXTURE, is_active: false }), {
+      return new Response(
+        JSON.stringify({ ...CHANNEL_FIXTURE, is_active: false }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+    if (method === "POST" && /^\/social\/channels\/[^/]+\/test$/.test(path)) {
+      return new Response(JSON.stringify({ message_id: "msg-test-1" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
-    }
-    if (method === "POST" && /^\/social\/channels\/[^/]+\/test$/.test(path)) {
-      return new Response(
-        JSON.stringify({ message_id: "msg-test-1" }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
     }
     if (method === "DELETE" && /^\/social\/channels\/[^/]+$/.test(path)) {
       return new Response(JSON.stringify({ id: "ch-1", deleted: true }), {
@@ -123,7 +132,9 @@ async function renderSection(
     });
   }) as typeof fetch;
 
-  const utils = render(<SocialSection token="t" refreshRevision={1} isAdmin={isAdmin} />);
+  const utils = render(
+    <SocialSection token="t" refreshRevision={1} isAdmin={isAdmin} />,
+  );
   await screen.findByText(/Ana García/);
   return utils;
 }
@@ -146,7 +157,12 @@ test("descartar un mensaje dispara el POST y muestra el resultado", async () => 
 
   await user.click(screen.getByRole("button", { name: "Descartar" }));
   await waitFor(() =>
-    expect(captured.some((r) => r.method === "POST" && r.path === "/social/messages/msg-1/dismiss")).toBe(true),
+    expect(
+      captured.some(
+        (r) =>
+          r.method === "POST" && r.path === "/social/messages/msg-1/dismiss",
+      ),
+    ).toBe(true),
   );
 });
 
@@ -156,11 +172,16 @@ test("admin puede crear un canal (POST con Idempotency-Key)", async () => {
   await renderSection(captured);
 
   await user.type(screen.getByLabelText("Nombre del canal"), "Instagram inbox");
-  await user.type(screen.getByLabelText("Secreto del webhook"), "s3cret-key-ok");
+  await user.type(
+    screen.getByLabelText("Secreto del webhook"),
+    "s3cret-key-ok",
+  );
   await user.click(screen.getByRole("button", { name: "Crear canal" }));
 
   await waitFor(() => {
-    const create = captured.find((r) => r.method === "POST" && r.path === "/social/channels");
+    const create = captured.find(
+      (r) => r.method === "POST" && r.path === "/social/channels",
+    );
     expect(create).toBeTruthy();
   });
   expect(screen.getByText(/Canal creado/)).toBeTruthy();

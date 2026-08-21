@@ -99,7 +99,9 @@ export function SocialSection({
   // Alta de canal (admin).
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newChannelType, setNewChannelType] = useState<"generic" | "whatsapp">("generic");
+  const [newChannelType, setNewChannelType] = useState<"generic" | "whatsapp">(
+    "generic",
+  );
   const [newSecret, setNewSecret] = useState("");
   const [newVerifyToken, setNewVerifyToken] = useState("");
 
@@ -109,7 +111,9 @@ export function SocialSection({
       { token },
     )
       .then((data) => setMessages(data.items))
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : String(err)),
+      );
     apiRequest<SocialStats>("/social/stats", { token })
       .then(setStats)
       .catch(() => undefined);
@@ -130,7 +134,10 @@ export function SocialSection({
     setActionError("");
     setActionResult("");
     try {
-      await apiRequest(`/social/messages/${id}/dismiss`, { method: "POST", token });
+      await apiRequest(`/social/messages/${id}/dismiss`, {
+        method: "POST",
+        token,
+      });
       setActionResult("Mensaje descartado y auditado.");
       reload();
     } catch (err) {
@@ -149,7 +156,9 @@ export function SocialSection({
       await apiRequest("/social/channels", {
         method: "POST",
         token,
-        headers: { "Idempotency-Key": `soc-${crypto.randomUUID?.() ?? Date.now()}` },
+        headers: {
+          "Idempotency-Key": `soc-${crypto.randomUUID?.() ?? Date.now()}`,
+        },
         body: JSON.stringify({
           name: newName.trim(),
           channel: newChannelType,
@@ -157,7 +166,9 @@ export function SocialSection({
           verify_token: newVerifyToken.trim() || null,
         }),
       });
-      setActionResult("Canal creado. Configura el webhook con la URL y el secreto.");
+      setActionResult(
+        "Canal creado. Configura el webhook con la URL y el secreto.",
+      );
       setNewName("");
       setNewSecret("");
       setNewVerifyToken("");
@@ -192,10 +203,10 @@ export function SocialSection({
     setActionError("");
     setActionResult("");
     try {
-      const result = await apiRequest<{ deleted: boolean; deactivated?: boolean }>(
-        `/social/channels/${row.id}`,
-        { method: "DELETE", token },
-      );
+      const result = await apiRequest<{
+        deleted: boolean;
+        deactivated?: boolean;
+      }>(`/social/channels/${row.id}`, { method: "DELETE", token });
       setActionResult(
         result.deactivated
           ? "El canal tenía mensajes: se desactivó (las evidencias del inbox se conservan)."
@@ -218,7 +229,9 @@ export function SocialSection({
         `/social/channels/${row.id}/test`,
         { method: "POST", token },
       );
-      setActionResult(`Mensaje de prueba triado (${result.message_id.slice(0, 8)}…).`);
+      setActionResult(
+        `Mensaje de prueba triado (${result.message_id.slice(0, 8)}…).`,
+      );
       reload();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
@@ -244,7 +257,10 @@ export function SocialSection({
       {stats && (
         <div className="stat-row">
           <span>
-            <strong>{Object.values(stats.by_status).reduce((a, b) => a + b, 0)}</strong> mensajes
+            <strong>
+              {Object.values(stats.by_status).reduce((a, b) => a + b, 0)}
+            </strong>{" "}
+            mensajes
           </span>
           <span>
             <strong>{stats.by_intent.lead ?? 0}</strong> leads
@@ -295,26 +311,39 @@ export function SocialSection({
             <div key={message.id} className="inbox-item">
               <div className="inbox-item-head">
                 <strong>
-                  {message.sender_name || message.sender_handle || message.email || "Remitente desconocido"}
+                  {message.sender_name ||
+                    message.sender_handle ||
+                    message.email ||
+                    "Remitente desconocido"}
                 </strong>
                 <span className="muted">
-                  {channelName(message.channel_id)} · {new Date(message.created_at ?? "").toLocaleString("es")}
+                  {channelName(message.channel_id)} ·{" "}
+                  {new Date(message.created_at ?? "").toLocaleString("es")}
                 </span>
               </div>
               <p className="inbox-body">{message.body}</p>
               {message.triage && (
                 <div className="triage-chips">
                   <span className={intentBadge(message.triage.intent)}>
-                    {INTENT_LABELS[message.triage.intent] ?? message.triage.intent}
+                    {INTENT_LABELS[message.triage.intent] ??
+                      message.triage.intent}
                   </span>
-                  <span className="badge badge-blue">score {message.triage.score_social}</span>
+                  <span className="badge badge-blue">
+                    score {message.triage.score_social}
+                  </span>
                   <span className="badge badge-muted">
-                    {message.triage.language === "en" ? "EN" : "ES"} · {message.triage.register}
+                    {message.triage.language === "en" ? "EN" : "ES"} ·{" "}
+                    {message.triage.register}
                   </span>
-                  {message.triage.urgency != null && message.triage.urgency >= 40 && (
-                    <span className="badge badge-warn">urgente {message.triage.urgency}</span>
-                  )}
-                  <span className="badge badge-muted">{STATUS_LABELS[message.status]}</span>
+                  {message.triage.urgency != null &&
+                    message.triage.urgency >= 40 && (
+                      <span className="badge badge-warn">
+                        urgente {message.triage.urgency}
+                      </span>
+                    )}
+                  <span className="badge badge-muted">
+                    {STATUS_LABELS[message.status]}
+                  </span>
                 </div>
               )}
               {message.status !== "dismissed" && (
@@ -362,9 +391,15 @@ export function SocialSection({
                     <td>{row.name}</td>
                     <td>{CHANNEL_LABELS[row.channel] ?? row.channel}</td>
                     <td>
-                  <span className={row.is_active ? "badge badge-green" : "badge badge-muted"}>
-                    {row.is_active ? "Activo" : "Inactivo"}
-                  </span>
+                      <span
+                        className={
+                          row.is_active
+                            ? "badge badge-green"
+                            : "badge badge-muted"
+                        }
+                      >
+                        {row.is_active ? "Activo" : "Inactivo"}
+                      </span>
                     </td>
                     <td className="muted">
                       {row.secret_set ? `${row.secret_prefix}••••` : "—"}
@@ -440,13 +475,19 @@ export function SocialSection({
               value={newVerifyToken}
               onChange={(event) => setNewVerifyToken(event.target.value)}
             />
-            <button type="submit" className="btn btn-primary" disabled={creating}>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={creating}
+            >
               {creating ? "Creando…" : "Crear canal"}
             </button>
           </form>
           <p className="muted">
-            URL del webhook: <code>/api/bridge/social/webhook/&lt;canal-id&gt;</code> — la firma y
-            el challenge dependen del tipo de canal. El secreto nunca se devuelve por API.
+            URL del webhook:{" "}
+            <code>/api/bridge/social/webhook/&lt;canal-id&gt;</code> — la firma
+            y el challenge dependen del tipo de canal. El secreto nunca se
+            devuelve por API.
           </p>
         </>
       )}

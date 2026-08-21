@@ -73,7 +73,17 @@ const SOURCE_LABELS: Record<string, string> = {
   local: "Local",
 };
 
-const OPS = ["eq", "neq", "gt", "gte", "lt", "lte", "contains", "is_set", "is_empty"];
+const OPS = [
+  "eq",
+  "neq",
+  "gt",
+  "gte",
+  "lt",
+  "lte",
+  "contains",
+  "is_set",
+  "is_empty",
+];
 
 const OP_LABELS: Record<string, string> = {
   eq: "=",
@@ -109,7 +119,9 @@ export function CampaignsSection({
   refreshRevision: number;
 }) {
   const [campaigns, setCampaigns] = useState<Campaign[] | null>(null);
-  const [templates, setTemplates] = useState<{ id: string; name: string }[]>([]);
+  const [templates, setTemplates] = useState<{ id: string; name: string }[]>(
+    [],
+  );
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
   const [actionResult, setActionResult] = useState("");
@@ -122,7 +134,10 @@ export function CampaignsSection({
   const [segment, setSegment] = useState<SegmentDraft>(EMPTY_SEGMENT);
   // Preview.
   const [previewing, setPreviewing] = useState(false);
-  const [preview, setPreview] = useState<{ count: number; sample: unknown[] } | null>(null);
+  const [preview, setPreview] = useState<{
+    count: number;
+    sample: unknown[];
+  } | null>(null);
   // Detalle.
   const [detail, setDetail] = useState<CampaignDetail | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
@@ -132,14 +147,21 @@ export function CampaignsSection({
     try {
       const [campaignData, templateData] = await Promise.all([
         apiRequest<{ campaigns: Campaign[] }>("/campaigns", { token }),
-        apiRequest<{ items: { id: string; name: string }[] }>("/email/templates", {
-          token,
-        }),
+        apiRequest<{ items: { id: string; name: string }[] }>(
+          "/email/templates",
+          {
+            token,
+          },
+        ),
       ]);
       setCampaigns(campaignData.campaigns);
       setTemplates(templateData.items);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudieron cargar las campañas");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "No se pudieron cargar las campañas",
+      );
     }
   }
 
@@ -163,8 +185,10 @@ export function CampaignsSection({
       template_name: newTemplate,
     };
     const segmentPayload: Record<string, unknown> = {};
-    if (segment.score_min !== "") segmentPayload.score_min = Number(segment.score_min);
-    if (segment.score_max !== "") segmentPayload.score_max = Number(segment.score_max);
+    if (segment.score_min !== "")
+      segmentPayload.score_min = Number(segment.score_min);
+    if (segment.score_max !== "")
+      segmentPayload.score_max = Number(segment.score_max);
     if (segment.sources.length > 0) segmentPayload.sources = segment.sources;
     const custom = segment.custom_fields.filter((row) => row.key.trim() !== "");
     if (custom.length > 0) {
@@ -181,7 +205,9 @@ export function CampaignsSection({
         token,
         method: "POST",
         body: JSON.stringify(payload),
-        headers: { "Idempotency-Key": `portal-campaign-${Date.now()}-${Math.random().toString(36).slice(2)}` },
+        headers: {
+          "Idempotency-Key": `portal-campaign-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        },
       });
       setActionResult(`Campaña «${newName.trim()}» creada como borrador.`);
       setNewName("");
@@ -190,7 +216,9 @@ export function CampaignsSection({
       setSegment(EMPTY_SEGMENT);
       await load();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "No se pudo crear la campaña");
+      setActionError(
+        err instanceof Error ? err.message : "No se pudo crear la campaña",
+      );
     } finally {
       setCreating(false);
     }
@@ -213,7 +241,9 @@ export function CampaignsSection({
       );
       setPreview(data);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "No se pudo evaluar el segmento");
+      setActionError(
+        err instanceof Error ? err.message : "No se pudo evaluar el segmento",
+      );
     } finally {
       setPreviewing(false);
     }
@@ -225,33 +255,48 @@ export function CampaignsSection({
     setActionError("");
     setPreview(null);
     try {
-      const data = await apiRequest<CampaignDetail>(`/campaigns/${campaignId}`, { token });
+      const data = await apiRequest<CampaignDetail>(
+        `/campaigns/${campaignId}`,
+        { token },
+      );
       setDetail(data);
       setPreviewId(campaignId);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "No se pudo abrir la campaña");
+      setActionError(
+        err instanceof Error ? err.message : "No se pudo abrir la campaña",
+      );
     }
   }
 
   async function sendCampaign(campaignId: string) {
-    if (!window.confirm("¿Enviar esta campaña a todos los leads del segmento? La operación es definitiva.")) {
+    if (
+      !window.confirm(
+        "¿Enviar esta campaña a todos los leads del segmento? La operación es definitiva.",
+      )
+    ) {
       return;
     }
     setSendingId(campaignId);
     setActionError("");
     setActionResult("");
     try {
-      const data = await apiRequest<CampaignStats & { recipients?: number; sent?: number; failed?: number; skipped?: number }>(
-        `/campaigns/${campaignId}/send`,
-        { token, method: "POST" },
-      );
+      const data = await apiRequest<
+        CampaignStats & {
+          recipients?: number;
+          sent?: number;
+          failed?: number;
+          skipped?: number;
+        }
+      >(`/campaigns/${campaignId}/send`, { token, method: "POST" });
       setActionResult(
         `Envío completado: ${data.sent ?? 0} enviados, ${data.failed ?? 0} fallidos, ${data.skipped ?? 0} omitidos.`,
       );
       await load();
       if (detail?.id === campaignId) await openDetail(campaignId);
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "No se pudo enviar la campaña");
+      setActionError(
+        err instanceof Error ? err.message : "No se pudo enviar la campaña",
+      );
     } finally {
       setSendingId(null);
     }
@@ -269,7 +314,9 @@ export function CampaignsSection({
       if (detail?.id === campaignId) setDetail(null);
       await load();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "No se pudo cancelar la campaña");
+      setActionError(
+        err instanceof Error ? err.message : "No se pudo cancelar la campaña",
+      );
     }
   }
 
@@ -282,10 +329,15 @@ export function CampaignsSection({
     }));
   }
 
-  function updateCriterion(index: number, patch: Partial<{ key: string; op: string; value: string }>) {
+  function updateCriterion(
+    index: number,
+    patch: Partial<{ key: string; op: string; value: string }>,
+  ) {
     setSegment((prev) => ({
       ...prev,
-      custom_fields: prev.custom_fields.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+      custom_fields: prev.custom_fields.map((row, i) =>
+        i === index ? { ...row, ...patch } : row,
+      ),
     }));
   }
 
@@ -297,8 +349,9 @@ export function CampaignsSection({
           <h2>Campañas segmentadas</h2>
         </div>
         <p className="muted">
-          Envía plantillas existentes a un segmento de leads (score, fuente o campos
-          personalizados) con tracking de apertura/clics por destinatario.
+          Envía plantillas existentes a un segmento de leads (score, fuente o
+          campos personalizados) con tracking de apertura/clics por
+          destinatario.
         </p>
       </div>
       {error && (
@@ -364,7 +417,9 @@ export function CampaignsSection({
               min={0}
               max={100}
               value={segment.score_min}
-              onChange={(e) => setSegment({ ...segment, score_min: e.target.value })}
+              onChange={(e) =>
+                setSegment({ ...segment, score_min: e.target.value })
+              }
             />
           </label>
           <label>
@@ -374,7 +429,9 @@ export function CampaignsSection({
               min={0}
               max={100}
               value={segment.score_max}
-              onChange={(e) => setSegment({ ...segment, score_max: e.target.value })}
+              onChange={(e) =>
+                setSegment({ ...segment, score_max: e.target.value })
+              }
             />
           </label>
         </div>
@@ -397,7 +454,9 @@ export function CampaignsSection({
               <input
                 aria-label="Clave del campo"
                 value={row.key}
-                onChange={(e) => updateCriterion(index, { key: e.target.value })}
+                onChange={(e) =>
+                  updateCriterion(index, { key: e.target.value })
+                }
                 placeholder="campo (key)"
               />
               <select
@@ -415,7 +474,9 @@ export function CampaignsSection({
                 <input
                   aria-label="Valor"
                   value={row.value}
-                  onChange={(e) => updateCriterion(index, { value: e.target.value })}
+                  onChange={(e) =>
+                    updateCriterion(index, { value: e.target.value })
+                  }
                   placeholder="valor"
                 />
               )}
@@ -425,7 +486,9 @@ export function CampaignsSection({
                 onClick={() =>
                   setSegment({
                     ...segment,
-                    custom_fields: segment.custom_fields.filter((_, i) => i !== index),
+                    custom_fields: segment.custom_fields.filter(
+                      (_, i) => i !== index,
+                    ),
                   })
                 }
               >
@@ -439,7 +502,10 @@ export function CampaignsSection({
             onClick={() =>
               setSegment({
                 ...segment,
-                custom_fields: [...segment.custom_fields, { key: "", op: "eq", value: "" }],
+                custom_fields: [
+                  ...segment.custom_fields,
+                  { key: "", op: "eq", value: "" },
+                ],
               })
             }
           >
@@ -493,10 +559,15 @@ export function CampaignsSection({
                   <td>{campaign.stats.clicked}</td>
                   <td>{campaign.stats.bounced}</td>
                   <td className="row-actions">
-                    <button type="button" className="ghost-button" onClick={() => void openDetail(campaign.id)}>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => void openDetail(campaign.id)}
+                    >
                       Detalle
                     </button>
-                    {(campaign.status === "draft" || campaign.status === "pending_retry") && (
+                    {(campaign.status === "draft" ||
+                      campaign.status === "pending_retry") && (
                       <>
                         <button
                           type="button"
@@ -529,11 +600,18 @@ export function CampaignsSection({
             <div>
               <h3>{detail.name}</h3>
               <p className="muted">
-                Plantilla: {detail.template_name} · {STATUS_LABELS[detail.status] ?? detail.status}
-                {detail.sent_at ? ` · enviada ${new Date(detail.sent_at).toLocaleString()}` : ""}
+                Plantilla: {detail.template_name} ·{" "}
+                {STATUS_LABELS[detail.status] ?? detail.status}
+                {detail.sent_at
+                  ? ` · enviada ${new Date(detail.sent_at).toLocaleString()}`
+                  : ""}
               </p>
             </div>
-            <button type="button" className="ghost-button" onClick={() => setDetail(null)}>
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={() => setDetail(null)}
+            >
               Cerrar detalle
             </button>
           </div>
@@ -544,7 +622,9 @@ export function CampaignsSection({
             <span className="pill">Clics {detail.stats.clicked}</span>
             <span className="pill">Rebotados {detail.stats.bounced}</span>
             <span className="pill">Fallidos {detail.stats.failed}</span>
-            {detail.stats.queued > 0 && <span className="pill">En cola {detail.stats.queued}</span>}
+            {detail.stats.queued > 0 && (
+              <span className="pill">En cola {detail.stats.queued}</span>
+            )}
             <span className="pill">Omitidos {detail.stats.skipped}</span>
           </div>
           {detail.stats.sent > 0 && (
@@ -557,7 +637,10 @@ export function CampaignsSection({
                 <span aria-hidden="true"> · </span>
                 Tasa de rebote <strong>{detail.stats.bounce_rate}%</strong>
                 <span aria-hidden="true"> · </span>
-                Entregados <strong>{detail.stats.sent - detail.stats.bounced}</strong> de {detail.stats.sent}
+                Entregados{" "}
+                <strong>
+                  {detail.stats.sent - detail.stats.bounced}
+                </strong> de {detail.stats.sent}
               </p>
             </div>
           )}
@@ -574,7 +657,9 @@ export function CampaignsSection({
               <span className="muted">
                 El segmento alcanza <strong>{preview.count}</strong> leads
                 {preview.sample.length > 0 &&
-                  `, p. ej. ${(preview.sample as { first_name?: string; email?: string }[])
+                  `, p. ej. ${(
+                    preview.sample as { first_name?: string; email?: string }[]
+                  )
                     .map((lead) => lead.first_name ?? lead.email ?? "")
                     .filter(Boolean)
                     .join(", ")}`}
@@ -584,7 +669,10 @@ export function CampaignsSection({
           </div>
           <h4>Destinatarios</h4>
           {detail.recipients.length === 0 ? (
-            <p className="muted">Todavía no hay destinatarios (envía la campaña para materializarlos).</p>
+            <p className="muted">
+              Todavía no hay destinatarios (envía la campaña para
+              materializarlos).
+            </p>
           ) : (
             <table className="data-table">
               <thead>
@@ -606,7 +694,12 @@ export function CampaignsSection({
                       <span className={`badge status-${recipient.status}`}>
                         {RECIPIENT_LABELS[recipient.status] ?? recipient.status}
                       </span>
-                      {recipient.error && <span className="muted small"> ({recipient.error})</span>}
+                      {recipient.error && (
+                        <span className="muted small">
+                          {" "}
+                          ({recipient.error})
+                        </span>
+                      )}
                     </td>
                     <td>{recipient.opened ? "✓" : "—"}</td>
                     <td>{recipient.clicked ? "✓" : "—"}</td>

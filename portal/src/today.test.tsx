@@ -102,7 +102,9 @@ test("las tarjetas navegan a su sección con un clic", async () => {
   );
   expect(window.location.hash).toBe("#aprobaciones");
 
-  await userEvent.click(screen.getByRole("button", { name: /Revisar campañas/ }));
+  await userEvent.click(
+    screen.getByRole("button", { name: /Revisar campañas/ }),
+  );
   expect(sessionStorage.getItem("portal_clientes_tab")).toBe("campanas");
   expect(window.location.hash).toBe("#clientes");
 
@@ -120,7 +122,11 @@ test("las tarjetas navegan a su sección con un clic", async () => {
 });
 
 test("el RBAC oculta las tarjetas que el rol no puede alcanzar", async () => {
-  const restricted = { ...FULL_PERMISSIONS, approve: false, manage_leads: false };
+  const restricted = {
+    ...FULL_PERMISSIONS,
+    approve: false,
+    manage_leads: false,
+  };
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     if (requestPath(input) === "/today") return response(todayPayload());
     return response({ detail: "Ruta no mockeada" }, 500);
@@ -137,7 +143,8 @@ test("el RBAC oculta las tarjetas que el rol no puede alcanzar", async () => {
 });
 
 test("un error del endpoint se muestra como alerta", async () => {
-  globalThis.fetch = (async () => response({ detail: "boom" }, 500)) as typeof fetch;
+  globalThis.fetch = (async () =>
+    response({ detail: "boom" }, 500)) as typeof fetch;
   render(<TodaySection token="token" permissions={FULL_PERMISSIONS} />);
   expect(await screen.findByRole("alert")).toBeTruthy();
 });

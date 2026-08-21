@@ -139,12 +139,14 @@ async function renderSection(captured: CapturedRequest[] = []) {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = requestPath(input);
     captured.push({ path, method: init?.method ?? "GET" });
-    const match = path.match(/calendar\/agenda\?.*start=(\d{4}-\d{2}-\d{2}).*end=(\d{4}-\d{2}-\d{2})/);
+    const match = path.match(
+      /calendar\/agenda\?.*start=(\d{4}-\d{2}-\d{2}).*end=(\d{4}-\d{2}-\d{2})/,
+    );
     if (match) {
-      return new Response(
-        JSON.stringify(buildAgenda(match[1], match[2])),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+      return new Response(JSON.stringify(buildAgenda(match[1], match[2])), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
     return new Response(JSON.stringify({ detail: "no encontrado" }), {
       status: 404,

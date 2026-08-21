@@ -262,7 +262,9 @@ export function CustomFieldsSection({
                       field.label
                     )}
                   </td>
-                  <td>{ENTITY_LABELS[field.entity_type] ?? field.entity_type}</td>
+                  <td>
+                    {ENTITY_LABELS[field.entity_type] ?? field.entity_type}
+                  </td>
                   <td>
                     {FIELD_TYPE_LABELS[field.field_type] ?? field.field_type}
                     {field.options && field.options.length > 0
@@ -283,7 +285,7 @@ export function CustomFieldsSection({
                         ))}
                       </select>
                     ) : (
-                      VISIBILITY_LABELS[field.visibility] ?? field.visibility
+                      (VISIBILITY_LABELS[field.visibility] ?? field.visibility)
                     )}
                   </td>
                   <td>
@@ -344,7 +346,10 @@ export function CustomFieldsSection({
         </div>
       )}
 
-      <form className="kanban-editor" onSubmit={(event) => void createField(event)}>
+      <form
+        className="kanban-editor"
+        onSubmit={(event) => void createField(event)}
+      >
         <p>
           Nuevo campo. La clave es estable (minúsculas, números, guiones); la
           etiqueta es editable. Desactivar sustituye a borrar: los valores ya

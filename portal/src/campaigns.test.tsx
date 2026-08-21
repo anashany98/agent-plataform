@@ -107,13 +107,21 @@ async function renderSection(
     }
     if (method === "POST" && /^\/campaigns\/[^/]+\/preview$/.test(path)) {
       return new Response(
-        JSON.stringify({ count: 3, sample: [{ id: "lead-1", first_name: "Ana" }] }),
+        JSON.stringify({
+          count: 3,
+          sample: [{ id: "lead-1", first_name: "Ana" }],
+        }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
     if (method === "POST" && /^\/campaigns\/[^/]+\/send$/.test(path)) {
       return new Response(
-        JSON.stringify({ ...CAMPAIGN_FIXTURE.stats, sent: 2, failed: 0, skipped: 0 }),
+        JSON.stringify({
+          ...CAMPAIGN_FIXTURE.stats,
+          sent: 2,
+          failed: 0,
+          skipped: 0,
+        }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
@@ -150,9 +158,13 @@ test("lista campañas con estadísticas", async () => {
     expect(screen.getByText("Oferta septiembre")).toBeTruthy();
   });
   expect(screen.getByText("Borrador")).toBeTruthy();
-  expect(screen.getAllByText("0", { selector: "td" }).length).toBeGreaterThan(0);
+  expect(screen.getAllByText("0", { selector: "td" }).length).toBeGreaterThan(
+    0,
+  );
   expect(
-    captured.some((request) => request.path === "/campaigns" && request.method === "GET"),
+    captured.some(
+      (request) => request.path === "/campaigns" && request.method === "GET",
+    ),
   ).toBe(true);
 });
 
@@ -163,21 +175,35 @@ test("crea campaña enviando el segmento construido", async () => {
   await waitFor(() => {
     expect(screen.getByText("Nueva campaña")).toBeTruthy();
   });
-  await user.type(screen.getByPlaceholderText("Ej.: Oferta septiembre logística"), "Oferta logística");
-  await user.selectOptions(screen.getByLabelText("Plantilla de email (activa)"), "Plantilla Demo");
+  await user.type(
+    screen.getByPlaceholderText("Ej.: Oferta septiembre logística"),
+    "Oferta logística",
+  );
+  await user.selectOptions(
+    screen.getByLabelText("Plantilla de email (activa)"),
+    "Plantilla Demo",
+  );
   await user.type(screen.getByLabelText("Score mínimo (0-100)"), "25");
   await user.click(screen.getByLabelText("Web"));
-  await user.click(screen.getByRole("button", { name: "+ Criterio de campo personalizado" }));
+  await user.click(
+    screen.getByRole("button", { name: "+ Criterio de campo personalizado" }),
+  );
   await user.type(screen.getByLabelText("Clave del campo"), "sector");
   await user.selectOptions(screen.getByLabelText("Operador"), "eq");
   await user.type(screen.getByLabelText("Valor"), "logistica");
-  await user.click(screen.getByRole("button", { name: "Crear campaña (borrador)" }));
+  await user.click(
+    screen.getByRole("button", { name: "Crear campaña (borrador)" }),
+  );
 
   await waitFor(() => {
-    const post = captured.find((request) => request.method === "POST" && request.path === "/campaigns");
+    const post = captured.find(
+      (request) => request.method === "POST" && request.path === "/campaigns",
+    );
     expect(post).toBeTruthy();
   });
-  const post = captured.find((request) => request.method === "POST" && request.path === "/campaigns")!;
+  const post = captured.find(
+    (request) => request.method === "POST" && request.path === "/campaigns",
+  )!;
   const body = JSON.parse(String(post.body)) as {
     name: string;
     segment: { score_min: number; sources: string[]; custom_fields: unknown[] };

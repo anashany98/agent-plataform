@@ -111,15 +111,10 @@ jobs:
           engine.dispose()
           PY
 
-      - name: PostgreSQL transactional invariants
-        env:
-          PYTHONPATH: ${{ github.workspace }}/bridge-api
-          DATABASE_URL: postgresql://bridge_user:ci-disposable-bridge-password@127.0.0.1:5432/p0_verify_deadbeefcafe
-          INSTALLATION_ID: p0-verify-deadbeefcafe
-          P0_VERIFY_RUN_ID: deadbeefcafe
-          P0_VERIFY_EPHEMERAL_ACK: DISPOSABLE-P0-POSTGRES-ONLY
-        run: python bridge-api/scripts/verify_p0_postgres.py
-
+      # Orden crítico: el verificador de migraciones parte de una BD vacía
+      # (aplica `upgrade head` él mismo y deja el esquema completo); el
+      # verificador de invariantes asume el esquema ya creado. Ejecutarlos
+      # al revés provoca NoSuchTableError en limpio.
       - name: Alembic clean, downgrade and re-upgrade
         env:
           PYTHONPATH: ${{ github.workspace }}/bridge-api
@@ -128,6 +123,15 @@ jobs:
           P0_VERIFY_RUN_ID: deadbeefcafe
           P0_VERIFY_EPHEMERAL_ACK: DISPOSABLE-P0-POSTGRES-ONLY
         run: python bridge-api/scripts/verify_p0_migrations_postgres.py
+
+      - name: PostgreSQL transactional invariants
+        env:
+          PYTHONPATH: ${{ github.workspace }}/bridge-api
+          DATABASE_URL: postgresql://bridge_user:ci-disposable-bridge-password@127.0.0.1:5432/p0_verify_deadbeefcafe
+          INSTALLATION_ID: p0-verify-deadbeefcafe
+          P0_VERIFY_RUN_ID: deadbeefcafe
+          P0_VERIFY_EPHEMERAL_ACK: DISPOSABLE-P0-POSTGRES-ONLY
+        run: python bridge-api/scripts/verify_p0_postgres.py
 
       - name: Backup and restore into empty PostgreSQL
         env:

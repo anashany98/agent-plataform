@@ -105,7 +105,11 @@ test("el aging sub-diario se muestra en horas, no como 0 días", async () => {
     screen.getByText((content, element) => {
       const isCount =
         element !== null && element.classList.contains("funnel-count");
-      return isCount && content.includes("9 horas") && content.includes("máx 13 horas");
+      return (
+        isCount &&
+        content.includes("9 horas") &&
+        content.includes("máx 13 horas")
+      );
     }),
   ).toBeTruthy();
 });
@@ -133,7 +137,10 @@ test("el report sin datos muestra guiones y el estado vacío del funnel", async 
 
 test("el report muestra el error si la API falla", async () => {
   globalThis.fetch = (async () =>
-    response({ detail: "No tienes permiso para realizar esta operación." }, 403)) as typeof fetch;
+    response(
+      { detail: "No tienes permiso para realizar esta operación." },
+      403,
+    )) as typeof fetch;
 
   render(<SalesReport token="token-test" refreshRevision={1} />);
   await waitFor(() => {

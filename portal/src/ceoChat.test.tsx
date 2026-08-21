@@ -49,13 +49,12 @@ let fakeRecognition: FakeSpeechRecognition | null = null;
 
 function installSpeechRecognition(enabled: boolean) {
   delete (window as unknown as Record<string, unknown>).SpeechRecognition;
-  delete (
-    window as unknown as Record<string, unknown>
-  ).webkitSpeechRecognition;
+  delete (window as unknown as Record<string, unknown>).webkitSpeechRecognition;
   if (!enabled) return;
   fakeRecognition = new FakeSpeechRecognition();
-  (window as unknown as { SpeechRecognition: typeof FakeSpeechRecognition })
-    .SpeechRecognition = class extends FakeSpeechRecognition {
+  (
+    window as unknown as { SpeechRecognition: typeof FakeSpeechRecognition }
+  ).SpeechRecognition = class extends FakeSpeechRecognition {
     constructor() {
       super();
       // El mock necesita capturar la instancia para las aserciones de voz.
@@ -142,7 +141,9 @@ test("el dictado acumula frases sucesivas en el mismo mensaje", async () => {
     "Mensaje para el asistente",
   ) as HTMLInputElement;
   await waitFor(() => {
-    expect(input.value).toContain("muestra las automatizaciones y pausa el sync");
+    expect(input.value).toContain(
+      "muestra las automatizaciones y pausa el sync",
+    );
   });
 });
 
@@ -153,12 +154,8 @@ test("un error de permisos muestra un mensaje amigable y deja de escuchar", asyn
   await userEvent.click(screen.getByRole("button", { name: "Hablar" }));
   fakeRecognition?.onerror?.({ error: "not-allowed" });
 
-  expect(
-    await screen.findByText(/No se pudo usar el micrófono/),
-  ).toBeTruthy();
-  expect(
-    screen.getByRole("button", { name: "Hablar" }),
-  ).toBeTruthy();
+  expect(await screen.findByText(/No se pudo usar el micrófono/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Hablar" })).toBeTruthy();
 });
 
 test("sin reconocimiento de voz el botón no aparece y el teclado funciona", async () => {
@@ -174,7 +171,8 @@ test("sin reconocimiento de voz el botón no aparece y el teclado funciona", asy
   await waitFor(() => {
     expect(
       calls.some(
-        (call) => call.url.includes("/ceo/chat") && call.init?.method === "POST",
+        (call) =>
+          call.url.includes("/ceo/chat") && call.init?.method === "POST",
       ),
     ).toBe(true);
   });
@@ -191,7 +189,5 @@ test("detener la escucha con el botón corta el reconocimiento", async () => {
     screen.getByRole("button", { name: "Detener la escucha" }),
   );
   expect(fakeRecognition?.started).toBe(false);
-  expect(
-    screen.getByRole("button", { name: "Hablar" }),
-  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Hablar" })).toBeTruthy();
 });

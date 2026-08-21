@@ -43,7 +43,13 @@ function formatWhen(value: string | null): string {
   });
 }
 
-function LeadCustomFields({ token, leadId }: { token: string; leadId: string }) {
+function LeadCustomFields({
+  token,
+  leadId,
+}: {
+  token: string;
+  leadId: string;
+}) {
   const [rows, setRows] = useState<CustomValueRow[] | null>(null);
   const [error, setError] = useState("");
   const [drafts, setDrafts] = useState<Record<string, unknown>>({});
@@ -65,7 +71,9 @@ function LeadCustomFields({ token, leadId }: { token: string; leadId: string }) 
       .catch((err) => {
         if (!cancelled)
           setError(
-            err instanceof Error ? err.message : "No se pudieron cargar los campos",
+            err instanceof Error
+              ? err.message
+              : "No se pudieron cargar los campos",
           );
       });
     return () => {
@@ -96,7 +104,11 @@ function LeadCustomFields({ token, leadId }: { token: string; leadId: string }) 
       setSavedFlash("Campos guardados.");
       window.setTimeout(() => setSavedFlash(""), 4_000);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudieron guardar los campos");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "No se pudieron guardar los campos",
+      );
     } finally {
       setSaving(false);
     }
@@ -151,11 +163,16 @@ function LeadCustomFields({ token, leadId }: { token: string; leadId: string }) 
                     ) : row.field.field_type === "select" ? (
                       <select
                         aria-label={row.field.label}
-                        value={draft === null || draft === undefined ? "" : String(draft)}
+                        value={
+                          draft === null || draft === undefined
+                            ? ""
+                            : String(draft)
+                        }
                         onChange={(e) =>
                           setDrafts((current) => ({
                             ...current,
-                            [row.field.id]: e.target.value === "" ? null : e.target.value,
+                            [row.field.id]:
+                              e.target.value === "" ? null : e.target.value,
                           }))
                         }
                       >
@@ -176,7 +193,11 @@ function LeadCustomFields({ token, leadId }: { token: string; leadId: string }) 
                               : "text"
                         }
                         aria-label={row.field.label}
-                        value={draft === null || draft === undefined ? "" : String(draft)}
+                        value={
+                          draft === null || draft === undefined
+                            ? ""
+                            : String(draft)
+                        }
                         onChange={(e) =>
                           setDrafts((current) => ({
                             ...current,

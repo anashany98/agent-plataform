@@ -169,7 +169,9 @@ export function WebhooksSection({
       await loadSubscriptions();
     } catch (err) {
       setActionError(
-        err instanceof Error ? err.message : "No se pudo guardar la suscripción",
+        err instanceof Error
+          ? err.message
+          : "No se pudo guardar la suscripción",
       );
     } finally {
       setSaving(false);
@@ -195,7 +197,9 @@ export function WebhooksSection({
       await loadSubscriptions();
     } catch (err) {
       setActionError(
-        err instanceof Error ? err.message : "No se pudo cambiar la suscripción",
+        err instanceof Error
+          ? err.message
+          : "No se pudo cambiar la suscripción",
       );
     }
   }
@@ -214,7 +218,9 @@ export function WebhooksSection({
       await loadSubscriptions();
     } catch (err) {
       setActionError(
-        err instanceof Error ? err.message : "No se pudo eliminar la suscripción",
+        err instanceof Error
+          ? err.message
+          : "No se pudo eliminar la suscripción",
       );
     }
   }

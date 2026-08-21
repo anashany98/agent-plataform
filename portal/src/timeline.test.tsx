@@ -54,7 +54,9 @@ async function renderDrawer(
 ) {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://portal.test");
-    if (url.pathname.replace(/^\/api\/bridge/, "") === "/leads/lead-1/timeline") {
+    if (
+      url.pathname.replace(/^\/api\/bridge/, "") === "/leads/lead-1/timeline"
+    ) {
       return response(data);
     }
     return response({}, 404);
@@ -98,7 +100,9 @@ test("el drawer vacío muestra el estado sin interacciones", async () => {
   const data = timelineFixture();
   data.timeline = [];
   await renderDrawer(data);
-  expect(screen.getByText("Sin interacciones registradas todavía.")).toBeTruthy();
+  expect(
+    screen.getByText("Sin interacciones registradas todavía."),
+  ).toBeTruthy();
 });
 
 test("Esc cierra la ficha", async () => {
@@ -106,7 +110,9 @@ test("Esc cierra la ficha", async () => {
   let closed = false;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = new URL(String(input), "http://portal.test");
-    if (url.pathname.replace(/^\/api\/bridge/, "") === "/leads/lead-1/timeline") {
+    if (
+      url.pathname.replace(/^\/api\/bridge/, "") === "/leads/lead-1/timeline"
+    ) {
       return response(timelineFixture());
     }
     return response({}, 404);
@@ -129,7 +135,11 @@ test("la ficha muestra el error si la API falla", async () => {
   globalThis.fetch = (async () =>
     response({ detail: "Lead no encontrado" }, 404)) as typeof fetch;
   render(
-    <LeadTimelineDrawer token="t" leadId="lead-no-existe" onClose={() => undefined} />,
+    <LeadTimelineDrawer
+      token="t"
+      leadId="lead-no-existe"
+      onClose={() => undefined}
+    />,
   );
   await waitFor(() => {
     expect(screen.getByText("Lead no encontrado")).toBeTruthy();

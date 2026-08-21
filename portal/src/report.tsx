@@ -93,7 +93,11 @@ export function SalesReport({
   const maxCount = Math.max(1, ...(report?.stages.map((s) => s.count) ?? [1]));
 
   return (
-    <section id="pipeline-report" className="panel" aria-label="Reporting de ventas">
+    <section
+      id="pipeline-report"
+      className="panel"
+      aria-label="Reporting de ventas"
+    >
       <div className="panel-heading">
         <div>
           <p>CRM local · P1-b</p>

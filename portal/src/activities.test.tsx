@@ -34,11 +34,13 @@ function activityFixture(overrides: Partial<ActivityRow> = {}): ActivityRow {
   };
 }
 
-function setupFetch(overrides: {
-  activities?: ActivityRow[];
-  createStatus?: number;
-  remindBody?: { delivery_status: string; provider: string };
-} = {}) {
+function setupFetch(
+  overrides: {
+    activities?: ActivityRow[];
+    createStatus?: number;
+    remindBody?: { delivery_status: string; provider: string };
+  } = {},
+) {
   const calls: Array<{ method: string; path: string }> = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), "http://portal.test");
@@ -65,7 +67,10 @@ function setupFetch(overrides: {
     }
     if (method === "POST" && path === "/activities") {
       if (overrides.createStatus) return response({}, overrides.createStatus);
-      return response(activityFixture({ id: "act-2", title: "Nueva tarea" }), 201);
+      return response(
+        activityFixture({ id: "act-2", title: "Nueva tarea" }),
+        201,
+      );
     }
     if (method === "POST" && /^\/activities\/[^/]+\/remind$/.test(path)) {
       return response(
@@ -76,7 +81,12 @@ function setupFetch(overrides: {
       );
     }
     if (method === "PATCH" && /^\/activities\/[^/]+$/.test(path)) {
-      return response(activityFixture({ status: "done", completed_at: "2026-08-18T12:00:00Z" }));
+      return response(
+        activityFixture({
+          status: "done",
+          completed_at: "2026-08-18T12:00:00Z",
+        }),
+      );
     }
     return response({}, 404);
   }) as typeof fetch;
@@ -113,7 +123,9 @@ test("crear una tarea dispara el POST y recarga la lista", async () => {
       ),
     ).toBe(true);
   });
-  expect(await screen.findByText("Tarea creada. Cambio auditado.")).toBeTruthy();
+  expect(
+    await screen.findByText("Tarea creada. Cambio auditado."),
+  ).toBeTruthy();
 });
 
 test("completar una tarea dispara el PATCH de estado", async () => {
@@ -123,8 +135,7 @@ test("completar una tarea dispara el PATCH de estado", async () => {
   await waitFor(() => {
     expect(
       calls.some(
-        (call) =>
-          call.method === "PATCH" && call.path === "/activities/act-1",
+        (call) => call.method === "PATCH" && call.path === "/activities/act-1",
       ),
     ).toBe(true);
   });
@@ -149,7 +160,10 @@ test("recordar ahora envía el recordatorio por el spool y lo confirma", async (
 
 test("muestra el error si la API falla al cargar", async () => {
   globalThis.fetch = (async () =>
-    response({ detail: "El servicio no está disponible temporalmente." }, 503)) as typeof fetch;
+    response(
+      { detail: "El servicio no está disponible temporalmente." },
+      503,
+    )) as typeof fetch;
   render(<ActivitiesSection token="token-test" refreshRevision={1} />);
   await waitFor(() => {
     expect(

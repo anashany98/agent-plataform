@@ -194,7 +194,11 @@ export function CalendarSection({
   return (
     <section className="calendar-section" aria-label="Calendario de comercial">
       <div className="calendar-toolbar">
-        <div className="segmented" role="tablist" aria-label="Vista del calendario">
+        <div
+          className="segmented"
+          role="tablist"
+          aria-label="Vista del calendario"
+        >
           <button
             type="button"
             role="tab"
@@ -224,7 +228,11 @@ export function CalendarSection({
           </button>
         </div>
         <div className="calendar-nav">
-          <button type="button" className="ghost-button" onClick={() => shift(-1)}>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => shift(-1)}
+          >
             ◀
           </button>
           <button
@@ -234,14 +242,20 @@ export function CalendarSection({
           >
             Hoy
           </button>
-          <button type="button" className="ghost-button" onClick={() => shift(1)}>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => shift(1)}
+          >
             ▶
           </button>
         </div>
         <h4 className="calendar-period">{periodLabel}</h4>
         {totals && (
           <div className="calendar-totals">
-            <span className="pill pill-neutral">{totals.total} actividades</span>
+            <span className="pill pill-neutral">
+              {totals.total} actividades
+            </span>
             <span className="pill pill-blue">{totals.pending} pendientes</span>
             <span className="pill pill-green">{totals.completed} hechas</span>
             {totals.overdue > 0 && (
@@ -252,9 +266,7 @@ export function CalendarSection({
       </div>
 
       {error && <p className="error-text">{error}</p>}
-      {!agenda && !error && (
-        <p className="muted-text">Cargando calendario…</p>
-      )}
+      {!agenda && !error && <p className="muted-text">Cargando calendario…</p>}
 
       {view === "month" && agenda && (
         <div className="calendar-month-grid">
@@ -289,7 +301,9 @@ export function CalendarSection({
                       <span className="badge badge-blue">{day.pending}</span>
                     )}
                     {day.completed > 0 && (
-                      <span className="badge badge-green">✓ {day.completed}</span>
+                      <span className="badge badge-green">
+                        ✓ {day.completed}
+                      </span>
                     )}
                   </span>
                 )}
@@ -360,12 +374,13 @@ export function CalendarSection({
                   <span className="muted-text"> · {activity.lead_name}</span>
                 )}
                 {activity.assignee_username && (
-                  <span className="muted-text"> · {activity.assignee_username}</span>
+                  <span className="muted-text">
+                    {" "}
+                    · {activity.assignee_username}
+                  </span>
                 )}
               </div>
-              <span
-                className={`status-pill status-${activity.status}`}
-              >
+              <span className={`status-pill status-${activity.status}`}>
                 {STATUS_LABELS[activity.status] ?? activity.status}
               </span>
             </div>

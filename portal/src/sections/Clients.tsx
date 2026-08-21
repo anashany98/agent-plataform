@@ -9,7 +9,12 @@
 import { FormEvent, useEffect, useState } from "react";
 import { API_BASE } from "../api";
 import { api } from "../apiHelpers";
-import { formatDate, formatNumber, isDemoSource, tryFocusRow } from "../appFormat";
+import {
+  formatDate,
+  formatNumber,
+  isDemoSource,
+  tryFocusRow,
+} from "../appFormat";
 import type { LeadRow } from "../appTypes";
 import { ActivitiesSection } from "../activities";
 import { AccountsSection } from "../accounts";
