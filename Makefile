@@ -20,7 +20,7 @@ ifeq ($(PROFILE),production)
 UP_BUILD_POLICY = --no-build --pull never
 endif
 
-.PHONY: check preflight configure build release-manifest up down restart logs health smoke migrate-check test test-unit test-coverage typecheck lint backup restore clean-project status provision update rollback
+.PHONY: check preflight verify-vendor-pins configure build release-manifest up down restart logs health smoke migrate-check test test-unit test-coverage typecheck lint backup restore clean-project status provision update rollback
 
 preflight:
 	@test -f "$(ENV_FILE)" || (echo "Falta $(ENV_FILE). Ejecuta make provision CLIENT_ID=$(CLIENT_ID)" >&2; exit 1)
@@ -31,8 +31,14 @@ preflight:
 	$(PYTHON) scripts/verify-backup-format.py
 	$(PYTHON) scripts/production-preflight.py --env-file "$(ENV_FILE)" --profile "$(PROFILE)" --mode "$(PREFLIGHT_MODE)" $(PREFLIGHT_FLAGS)
 
-check: preflight
+check: preflight verify-vendor-pins
 	$(COMPOSE) config >/dev/null
+
+# B-07: los forks de vendor/ (gitignored) deben coincidir con
+# infrastructure/vendor-lock.json. En clones sin vendor/ (perfil core) el
+# chequeo no aplica; con vendor/ presente, un pin divergente ROMPE el gate.
+verify-vendor-pins:
+	@if [ -d vendor ]; then $(PYTHON) scripts/verify-vendor-pins.py; else echo "vendor/ ausente (perfil core): verificación de pins no aplicable"; fi
 
 provision:
 	./scripts/provision-client.sh "$(CLIENT_ID)" "$(DOMAIN)" "$(PROXY_PORT)" "$(PROFILE)" "$(TLS_CERTIFICATE)" "$(TLS_PRIVATE_KEY)"

@@ -4,14 +4,15 @@ Plataforma de instalación aislada por cliente que integra un núcleo transaccio
 
 ## Estado verificado
 
-**Decisión actual: `NOT PRODUCTION READY — CRITICAL RISK`** (ver `docs/PRODUCTION_READINESS.md`, única fuente autoritativa).
+**Decisión actual: `NOT PRODUCTION READY — REMEDIATION INCOMPLETE`** (ver `docs/PRODUCTION_READINESS.md`, única fuente autoritativa; stop-ships abiertos: SS-01/02/03/06/07).
 
-Estado de la remediación en la rama `production-remediation` (2026-08-03):
+Estado de la remediación (corte 2026-08-21, ramas `production-remediation`/`remediation-sweep`):
 
-- Seis P0, quince P1 y dos P2 verificados con evidencia reproducible; 14 defectos abiertos (11 P1, 3 P2).
-- Corpus combinado de 228 pruebas (`pytest tests bridge-api/tests`) verde en ambos órdenes de colección.
-- Migraciones Alembic aditivas hasta la revisión `0005`; downgrades preservadores.
-- Portal con typecheck, build y tests de componentes/accesibilidad (vitest + axe) verdes.
+- Corpus combinado de **762 pruebas** (`pytest tests bridge-api/tests`): **750 passed / 12 skipped** (skips opt-in documentados: PostgreSQL real, PrestaShop real, Python 3.12, /dev/tcp).
+- Portal: **113 tests vitest** en 18 ficheros + `tsc --noEmit` limpio + build gated por typecheck.
+- Migraciones Alembic aditivas hasta la revisión `0026_agent_autonomy_extended`; cadena lineal sin ramas.
+- Módulos CRM B2B, agentes por módulo con aprobación, autonomía por excepción, CEO agent (chat/email/WhatsApp), finanzas (cierre mensual), campañas email y escucha social Fase 1 operativos y validados en vivo (detalle en `STATUS.md`).
+- Aislamiento por instalación forzado a nivel ORM (`before_flush` + `do_orm_execute`) con suite propia (`tests/regression/test_p0_model_tenant_isolation.py`).
 - `pip-audit` y `npm audit --omit=dev` sin vulnerabilidades (`scripts/audit_dependencies.py`).
 
 Los informes previos a la remediación (`docs/REMEDIATION_REPORT.md`, `docs/MASTER_PLATFORM_REPORT.md`, `docs/FINAL_REPORT.md`, `docs/COMMERCIAL_READINESS_REPORT.md`) están marcados como **SUPERSEDED** y no deben usarse para decisiones actuales. No se declara preparación para producción ni piloto comercial hasta superar los gates de `docs/PRODUCTION_READINESS.md`.

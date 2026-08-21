@@ -22,6 +22,7 @@ allá de los índices de vulnerabilidades estándar.
 from __future__ import annotations
 
 import json
+import platform
 import re
 import shutil
 import subprocess
@@ -125,6 +126,13 @@ def test_npm_audit_production_is_clean() -> None:
 
 @pytest.mark.skipif(shutil.which("pip") is None, reason="pip no instalado")
 @pytest.mark.skipif(sys.version_info[:2] != (3, 12), reason="el lock de producción requiere Python 3.12")
+@pytest.mark.skipif(
+    platform.system() == "Windows",
+    reason=(
+        "el lock de producción incluye uvloop (Linux-only): pip-audit no puede "
+        "instalarlo en Windows; la auditoría del lock corre en CI (ubuntu, job backend)"
+    ),
+)
 def test_pip_audit_runs_clean() -> None:
     """pip-audit sobre el lock exacto no debe encontrar vulnerabilidades."""
 
@@ -147,6 +155,13 @@ def test_pip_audit_runs_clean() -> None:
 
 
 @pytest.mark.skipif(sys.version_info[:2] != (3, 12), reason="el lock de producción requiere Python 3.12")
+@pytest.mark.skipif(
+    platform.system() == "Windows",
+    reason=(
+        "el lock de producción incluye uvloop (Linux-only): pip-audit no puede "
+        "instalarlo en Windows; la auditoría del lock corre en CI (ubuntu, job backend)"
+    ),
+)
 def test_audit_script_runs_clean() -> None:
     """El script de auditoría debe ejecutarse sin hallazgos bloqueantes."""
 

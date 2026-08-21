@@ -330,6 +330,13 @@ jobs:
       - name: Core profile resolves without vendor checkout
         run: docker compose --env-file .env.example --profile core config --quiet
 
+      # B-07: en CI no hay checkout de vendor/ (gitignored); el gate verifica
+      # que el lock es válido y que el verificador está cableado. Con vendor/
+      # presente (máquinas de operación) `make check` ejecuta la comparación
+      # completa contra los checkouts.
+      - name: Vendor lock declarations are verifiable
+        run: python scripts/verify-vendor-pins.py --help >/dev/null && python -c "import json,sys; p=json.load(open('infrastructure/vendor-lock.json',encoding='utf-8')); assert p.get('format_version')==1 and isinstance(p.get('sources'),list) and p['sources'], 'vendor-lock.json inválido'; print('vendor_lock=PASS', len(p['sources']), 'fuentes')"
+
       - name: Full profile resolves from pinned declarations
         run: docker compose --env-file .env.example --profile full config --quiet
 

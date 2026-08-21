@@ -62,7 +62,7 @@ flowchart LR
 
 Todas las entidades operativas propias llevan `installation_id`. El ORM aplica `with_loader_criteria` a lecturas, fuerza la instalación en inserts/updates y rechaza cambios cruzados en `before_flush`. Las relaciones críticas usan claves compuestas por instalación. La separación física por proyecto/DB sigue siendo obligatoria.
 
-La cadena Alembic vigente es lineal `0001…0013`. `0013` añade, sin borrar datos, `agent_definitions`, `wiki_pages`, `seo_projects`, `landing_pages` y `scheduled_tasks`; su downgrade conserva las tablas intencionadamente.
+La cadena Alembic vigente es lineal `0001…0026` (head `0026_agent_autonomy_extended`). Tras `0013` (tablas core de negocio: `agent_definitions`, `wiki_pages`, `seo_projects`, `landing_pages`, `scheduled_tasks`), las revisiones `0014…0026` añaden, sin borrar datos: mensajes de conversación, etapas de pipeline con `stage_changed_at`, actividades de comercial con SLA, campos personalizados, suscripciones de webhooks salientes, integración de email (plantillas/tracking), datos maestros, campañas segmentadas, escucha social, apariencia por instalación y autonomía de agentes con decisiones y revert. Los downgrades preservan las tablas intencionadamente.
 
 ## Flujos principales
 
