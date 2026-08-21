@@ -1,13 +1,23 @@
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 TEST_DB = Path('/tmp/agent_platform_fixed_tests.db')
 if TEST_DB.exists():
     TEST_DB.unlink()
 
+# Spool de email hermético (D-032): el default ``/data/emails`` no es
+# escribible por usuarios sin privilegios (p. ej. el runner de CI en
+# Linux) y haría fallar los flujos de spool con estado ``failed``. Los
+# tests usan un directorio temporal propio, limpiado al inicio.
+EMAIL_SPOOL_DIR = Path(tempfile.gettempdir()) / 'agent-platform-test-email-spool'
+shutil.rmtree(EMAIL_SPOOL_DIR, ignore_errors=True)
+
 os.environ.update(
     {
         'DATABASE_URL': f'sqlite:///{TEST_DB}',
+        'AUTOMATION_EMAIL_DIR': str(EMAIL_SPOOL_DIR),
         'ENVIRONMENT': 'testing',
         'INSTALLATION_ID': 'test-installation',
         'AUTH_SECRET': 'test-auth-secret-at-least-32-characters-long',

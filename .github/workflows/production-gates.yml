@@ -114,14 +114,42 @@ jobs:
       # Orden crítico: el verificador de migraciones parte de una BD vacía
       # (aplica `upgrade head` él mismo y deja el esquema completo); el
       # verificador de invariantes asume el esquema ya creado. Ejecutarlos
-      # al revés provoca NoSuchTableError en limpio.
-      - name: Alembic clean, downgrade and re-upgrade
+      # al revés provoca NoSuchTableError en limpio. Cada modo del
+      # verificador exige BD fresca (P0_MIGRATION_VERIFY_MODE es obligatorio):
+      # head-cycle valida ciclo completo head→base→head y historical-upgrade
+      # valida la adopción desde 0001 con fixture legacy y backfill.
+      - name: Alembic head-cycle verification
         env:
           PYTHONPATH: ${{ github.workspace }}/bridge-api
           DATABASE_URL: postgresql://bridge_user:ci-disposable-bridge-password@127.0.0.1:5432/p0_verify_deadbeefcafe
           INSTALLATION_ID: p0-verify-deadbeefcafe
           P0_VERIFY_RUN_ID: deadbeefcafe
           P0_VERIFY_EPHEMERAL_ACK: DISPOSABLE-P0-POSTGRES-ONLY
+          P0_MIGRATION_VERIFY_MODE: head-cycle
+        run: python bridge-api/scripts/verify_p0_migrations_postgres.py
+
+      - name: Recreate disposable database for historical upgrade
+        env:
+          ADMIN_DATABASE_URL: postgresql://bridge_user:ci-disposable-bridge-password@127.0.0.1:5432/postgres
+        run: |
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+          engine = create_engine(os.environ["ADMIN_DATABASE_URL"], isolation_level="AUTOCOMMIT")
+          with engine.connect() as connection:
+              connection.execute(text("DROP DATABASE IF EXISTS p0_verify_deadbeefcafe WITH (FORCE)"))
+              connection.execute(text("CREATE DATABASE p0_verify_deadbeefcafe"))
+          engine.dispose()
+          PY
+
+      - name: Alembic historical-upgrade verification
+        env:
+          PYTHONPATH: ${{ github.workspace }}/bridge-api
+          DATABASE_URL: postgresql://bridge_user:ci-disposable-bridge-password@127.0.0.1:5432/p0_verify_deadbeefcafe
+          INSTALLATION_ID: p0-verify-deadbeefcafe
+          P0_VERIFY_RUN_ID: deadbeefcafe
+          P0_VERIFY_EPHEMERAL_ACK: DISPOSABLE-P0-POSTGRES-ONLY
+          P0_MIGRATION_VERIFY_MODE: historical-upgrade
         run: python bridge-api/scripts/verify_p0_migrations_postgres.py
 
       - name: PostgreSQL transactional invariants
