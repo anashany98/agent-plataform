@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 02 - Inventario de componentes
 
 **Fecha:** 2026-08-02  
@@ -76,4 +78,3 @@ Compose, Dockerfiles, manifiestos Python/npm, código propio, migraciones, scrip
 - SBOM y escaneo de imágenes: BLOCKED por RAM > 90 % tras el build.
 - Inventario de modelos efectivamente descargados: BLOCKED por red interna y Ollama inaccesible.
 - Pruebas reales de APIs externas: requieren credenciales/sandboxes y topología corregida.
-

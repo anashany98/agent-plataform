@@ -1,90 +1,134 @@
 # Estado autoritativo de preparación para producción
 
-> **Este archivo es la única fuente autoritativa para decidir la preparación para producción del proyecto.** Las decisiones o etiquetas de readiness presentes en auditorías, planes, informes o releases anteriores son fotografías históricas y quedan supersedidas para decisiones actuales por este documento.
+**ÚNICA FUENTE AUTORITATIVA.** Cualquier cifra o decisión distinta en otro informe queda subordinada a este documento.
 
-## Decisión actual
+**Corte documental:** 2026-08-15, checkout `production-remediation` con cambios sin integrar.
+**Ámbito candidato:** perfil `production` (core propio + TLS), una instancia por cliente, sin vendors ni egress.
 
-# NOT PRODUCTION READY — CRITICAL RISK
+## Decisión vigente
 
-**Reevaluación 2026-08-10, commit `c5c0b52`:** se mantiene `0/30 VERIFIED` y se reabren gates del núcleo. Evidencia actual: 2 fallos de integración, 8 fallos de migración por `0006_product_embeddings.py` sin seguimiento, quality gates rojos, un helper de restore con `drop_all()` sin preflight de destino vacío, SSRF Chatwoot habilitado y Docker/runtime no disponible. Véase `docs/PROJECT_STATUS_AUDIT_2026-08-10.md`. Las cifras de defectos cerrados que siguen debajo son históricas y no autorizan promoción.
+> **NOT PRODUCTION READY — REMEDIATION INCOMPLETE**
 
-**Actualización 2026-08-10 (post-remediación, HEAD `09b854b` + working tree):** los ocho stop-ships de la auditoría están cerrados con evals de regresión — RA-01 (P0) `restore_to_url` ya no invoca `drop_all()` y exige marker explícito; RA-02 la migración `0006` es dialect-aware (pgvector en PostgreSQL, no-op en SQLite); RA-03 el replay del webhook devuelve 200 cacheado; RA-04 el chat usa el catálogo local visible cuando PrestaShop no está configurado; RA-05 `_LOG`→`log_event`; RA-06 `SAFE_FETCH_ALLOW_PRIVATE_NETWORK` off por defecto; RA-07 email fail-closed; RA-08 webhook saliente con secreto ≥32 chars y bloqueo RFC1918/loopback. La remediación live PrestaShop corrige `search_products()` (15/15 escenarios verdes contra la tienda real). El corpus vuelve a estar verde: unit 23, integración 35, migraciones 24 y regresión 222 passed + 9 skips opt-in/live; los quality gates D-030 pasan (ruff-hard 0, clean-zone 0, ratchet 243 = baseline 243, desglose reconciliado); la hermeticidad D-032 se extiende a credenciales PrestaShop/GHL y la suite completa corre en un solo proceso sin envenenamiento de estado. La decisión **no cambia**: sigue `NOT PRODUCTION READY — CRITICAL RISK` con `0/30 VERIFIED`, porque no existe release candidata identificada y el runtime (Docker/PostgreSQL/Redis/E2E) sigue bloqueado por RAM (B-010); los criterios PR-01, PR-07, PR-09, PR-13 y PR-27 mejoran su evidencia pero permanecen `BLOCKED` (ver matriz).
+La implementación y las suites han avanzado de forma sustancial, pero todavía no existe una candidata inmutable que haya superado build, escaneo de imágenes, despliegue TLS aislado, E2E de todos los módulos, restore integral, rollback y prueba de carga. La decisión debe reevaluarse únicamente con evidencia final reproducible.
 
-- **Fecha de evaluación:** 2 de agosto de 2026
-- **Fuentes evaluadas:** `agents.md` y `docs/PROJECT_TECHNICAL_AUDIT.md`
-- **Rama observada:** `production-remediation`
-- **Commit P0 observado:** `de236e9`
-- **Release candidata evaluada:** ninguna
+## Evidencia aceptada hasta este corte
 
-Los seis defectos P0 reproducidos están `VERIFIED` en la rama mediante 124 pruebas locales y PostgreSQL efímero real, incluido modo optimizado, concurrencia y ciclos de migración. Esto cierra el bloque P0 de implementación, pero no convierte la rama en candidata: permanecen 25 P1 y 5 P2 abiertos, no existe restore, build limpio/full stack, E2E crítico, validación UI, supply-chain/licencias ni release inmutable. Cuatro P1 nuevos fueron confirmados por revisión adversarial en PrestaShop, webhooks e importación.
+| Área | Resultado | Lectura correcta |
+|---|---|---|
+| Backend | 373 passed, 11 skipped | Corpus hermético actual; no certifica la imagen desplegada |
+| Calidad Python | hard 0, clean 0, ratchet 129 ≤ baseline 243 | Gate estático PASS |
+| PostgreSQL/migraciones | Cadena Alembic hasta `0013` verificada | Esquema/migraciones cubiertos; restore integral final PENDING |
+| Portal | 27/27, typecheck, formato, build y audit npm PASS | Componentes/build verdes; E2E visual de candidata PENDING |
+| Infra | perfiles, preflight, red, proxy, formato backup y pins PASS | Contrato estático/runtime aislado parcial; no release final |
+| Redis core | 7.2.14 Alpine 3.21 BSD-3; runtime PASS; Trivy 0 HIGH/CRITICAL | Cierra esta imagen concreta, no el scan del conjunto final |
+| Runtime existente | 14/14 healthy en desarrollo | Stale/dev; excluido de la decisión de producción |
 
-**Actualización 2026-08-03:** re-verificación en vivo del corpus; D-032 (harness no hermético) quedó `VERIFIED` en `4afd0c7`, D-012 (tool policy deny-by-default) en `4d97449`, D-021 (circuit breakers por proveedor, outbox durable con DLQ y recuperación de leads GHL sin pérdida ni duplicación) en `3733bad` y D-035 (checkpoint del resultado tras cada efecto externo visible y recuperación del crash ambiguo en takeover sin repetir respuestas ni presupuestos) en `5a3edf8`. Conteo actual: seis P0, once P1 y dos P2 verificados; 18 defectos abiertos (15 P1, 3 P2). Corpus combinado 196/196 en ambos órdenes de colección. D-010 quedó `VERIFIED` en `ce2723c`: como GHL no acepta claves de idempotencia, la microventana efecto→checkpoint (residual de D-035) se cierra con reconciliación previa al efecto contra el proveedor (oportunidades por referencia externa y notas por cuerpo exacto), con fallo cerrado ante búsqueda caída y DLQ para leads sin referencia; residual: contrato live del endpoint de búsqueda pendiente de sandbox GHL (B-004). D-020 quedó `VERIFIED` en `0541650`: clasificación RAG public/internal/confidential/restricted con ACL deny-by-default, DLP determinista en ingesta (DNI/NIE con letra, tarjeta con Luhn, IBAN ES mod-97, JWT, AWS, sk_live, claves privadas) que eleva la clasificación a confidential sin persistir valores y redacta respuesta y citas, rechazo de consultas con patrones de inyección y marcado `trusted=false` del contenido recuperado; residual: sandbox del proveedor RAG real (B-006). D-017 quedó `VERIFIED` en `7fb4f45`: Pillow fijado en 12.x (cierra 49 CVEs en 10.x/11.x), pypdf en 6.x (cierra CVE de 5.9.0), Vite subido a ^7 (esbuild path traversal cerrado) y `scripts/audit_dependencies.py` ejecuta pip-audit + npm audit bloqueando high/critical >0. D-028 quedó `VERIFIED` en `af53b8b`: middleware FastAPI con logs JSON correlacionados (correlation_id/request_id/tenant_id/user_id/route/method/status/latency_ms), redacción determinista de secretos por clave y valor, métricas Prometheus para HTTP/outbox/breaker/RAG/alertas y reglas in-memory integradas en `/metrics`; residual: OTel/Prometheus scrape y SLO formales (Fase 25). D-029 quedó `VERIFIED` en `ff0eed8`: export JSON portable de datos operativos (sin users ni AuditLog), erase con retención configurable e inmediata, proceso de borrados vencidos y legal hold que bloquea cualquier erase, borrado en orden FK con eliminación de archivos RAG, modelo `InstallationLifecycle` + migración aditiva `0005` y endpoints `/lifecycle/*` con `ADMIN_ROLES`; residual: revisión legal de la política de retención (B-008). D-026/D-027 quedaron `VERIFIED` en `33d77c1`: README reescrito contra la fuente autoritativa con banners SUPERSEDED en los cuatro informes históricos; el portal deja de prometer módulos fantasma (cinco anchors rotos corregidos con secciones reales respaldadas por `GET /tools/products`, nuevo `GET /rag/documents`, `GET /agents` y `GET /users`) y estrena runner vitest + testing-library + vitest-axe con 5 evals verdes; residual: E2E visual en viewports acordados (Fase 19). D-030 quedó `VERIFIED` en `ca73a6c`: quality gates con trinquete de deuda visible (`ruff-hard`, `ruff-clean-zone`, `ruff-ratchet` con baseline 213 por regla), B008 excluido globalmente y deuda de estilo en tests legacy corregida; residual: CI formal y modularización por dominio (Fases 25/26). Con este cierre la Wave 1 queda agotada: los once defectos abiertos restantes son P1 de runtime/bloqueados. Conteo actualizado: seis P0, quince P1 y cinco P2 verificados; 11 defectos abiertos (11 P1). Corpus combinado 235/235 en ambos órdenes de colección. Stack antiguo del propietario detenido con volúmenes intactos (`DECISIONS.md` D-007/D-008); margen de RAM pendiente de medición (B-001 mitigado). La decisión no cambia.
+`VERIFIED` abajo exige evidencia específica y reproducible. `PARTIAL` significa que existe control probado, pero falta una parte del criterio. `PENDING` impide dar el gate por cerrado.
 
-**Actualización 2026-08-04:** decisión D-012 — el propietario rechaza Supabase y selecciona extraer seis dominios de automatizaciones de FlowWink (MIT, v3.0.0) al motor del Bridge. Lote 1 entregado en `bf647cf` como funcionalidad nueva (T-015), sin cerrar defectos ni cambiar conteos: router de email local, `quote-expiry-reminders`, `dunning-processor`, `generate-invoice-pdf`, `send-webhook` HMAC y sweep pull, con endpoints `/automations/*` y 7 evals (corpus 242/242). El dominio Agentes/IA avanzó en el lote 2 (`59558a1`): `docs-chat` sobre el RAG del Bridge con abstención, citas y respuesta extractiva honesta sin LLM real (B-006); Contenido/SEO queda para la Fase SEO diferida. El 2026-08-04 se verificaron D-015 y D-016 en `6b34200`: `app/services/backup.py` con manifiesto (conteos+sha256), `restore_backup` y `verify_backup`, con **restauración REAL** verificada en SQLite y en PostgreSQL efímero, y `rollback_installation` que restaura los datos de una instalación a un punto conocido tras una mala release; corpus 248/248. Conteo actualizado: seis P0, diecisiete P1 y cinco P2 verificados; 9 defectos abiertos (9 P1), todos de runtime/bloqueados.
+## Artefactos superseded
 
-**Actualización 2026-08-06 (mejora `catalog_overview`):** el flujo `/webhooks/chatwoot` muestra un resumen del catálogo sincronizado desde PrestaShop cuando el cliente pregunta algo genérico tipo "¿qué tenéis?" o "¿qué me recomiendas?", sin LLM ni transferencia al equipo comercial; helper `_looks_like_product_inquiry` distingue intención de catálogo y la rama previa `verified_product_recommendations` sigue activa cuando hay coincidencia específica. En el mismo cambio se habilita `SAFE_FETCH_ALLOW_PRIVATE_NETWORK: "true"` en el bloque `&chatwoot-environment` del compose (consumido por `vendor/chatwoot/lib/safe_fetch.rb`) para que el webhook pueda entregar al hostname interno `bridge-api` en desarrollo sin ser filtrado por `ssrf_filter`; en producción la variable debe quedar apagada y el webhook expuesto por dominio público. 3 evals nuevos pasan en `tests/integration/test_commerce.py` (`catalog_overview`, `product_intent_falls_back_to_overview_when_no_specific_match`, `short_greeting_is_not_treated_as_product_inquiry`). La Wave 1 queda cerrada por completo: los seis P1 restantes son runtime/bloqueados (egress live D-006, preflight de puertos live D-009, handoff Chatwoot live D-019, release/imágenes por digest D-016-residual, alcance FlowWink D-018 y licencias D-023). La decisión no cambia.
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Los informes Markdown históricos llevan un banner equivalente. Los binarios/HTML existentes `PROJECT_STATUS_AUDIT_2026-08-10.html`, `PROJECT_TECHNICAL_AUDIT.html`, `PROJECT_TECHNICAL_AUDIT.pdf` y `STATUS_REPORT.pdf` corresponden a cortes anteriores y no se han regenerado en esta fase. Se conservan solo como trazabilidad; este documento prevalece.
 
-El runtime de la auditoría terminó detenido para proteger el host tras superar el 95 % de RAM durante el build. La recaptura de baseline confirma, mediante consultas de solo lectura, que los 14 contenedores siguen detenidos y los nueve volúmenes permanecen presentes; no se arrancó ningún servicio.
+## Matriz de los 30 criterios
 
-## Escala de estado
+| # | Criterio | Estado | Evidencia actual / condición de cierre |
+|---:|---|---|---|
+| 1 | Cero defectos P0 abiertos | PENDING | No hay P0 conocido en el corpus actual; falta triage final tras E2E/scan/restore |
+| 2 | P1 críticos del núcleo corregidos | PARTIAL | 384/9 y quality PASS; falta ejecutar la candidata completa |
+| 3 | Sin mocks en producción | PARTIAL | Preflight rechaza mocks/stubs y perfil production usa proveedores reales locales/`none`; falta inspeccionar imagen final |
+| 4 | Sin datos demo visibles | PARTIAL | Arranque production rechaza demo/seed; falta smoke de DB vacía/candidata |
+| 5 | Aislamiento entre clientes probado | PARTIAL | `installation_id`, filtros ORM y tests herméticos; falta prueba runtime simultánea A/B y restore cruzado negativo |
+| 6 | Confirmaciones seguras | PARTIAL | Token hash/TTL, estados, idempotencia y CAS cubiertos; falta E2E final/concurrencia desplegada |
+| 7 | Migraciones no destructivas | VERIFIED | Cadena `0001…0013`, head PostgreSQL y downgrade conservador verificados |
+| 8 | Cálculos deterministas | VERIFIED | Servicio servidor con `Decimal`, recálculo y tests de manipulación |
+| 9 | Operaciones idempotentes | PARTIAL | Contratos en webhooks, clientes, leads, comercio, imports, publicaciones y workflows; falta E2E multiretry final |
+| 10 | Permisos efectivos en backend | PARTIAL | Dependencias RBAC y tests; falta recorrido runtime de todos los roles |
+| 11 | Stack production arrancando limpio | PENDING | No se ha arrancado la candidata final con imágenes/manifest definitivos |
+| 12 | Servicios esenciales funcionales | PENDING | Contratos de readiness existen; falta smoke contra el stack final |
+| 13 | Tests críticos aprobados | VERIFIED | Backend 384/9, Portal 25/25, quality 0/0/128 y verificadores infra PASS |
+| 14 | E2E principales aprobados | PENDING | La evidencia histórica no corresponde a la candidata final |
+| 15 | Backup restaurado | PENDING | Formato 4 y verificador PASS; restore integral vacío final no ejecutado |
+| 16 | Rollback probado | PENDING | Procedimiento disponible; ensayo final de aplicación/datos no ejecutado |
+| 17 | Agentes limitados a tools autorizadas | VERIFIED | Registro persistente, allowlist deny-by-default y tests de política |
+| 18 | Facturación automática desactivada | VERIFIED | `ENABLE_AUTOMATIC_INVOICE_ISSUANCE=false`, validación de arranque y borrador + aprobación |
+| 19 | Publicaciones con aprobación | VERIFIED | Wiki/landing/agentes/tareas usan estado versionado y aprobación; automático bloqueado |
+| 20 | RAG aislado y con citas | PARTIAL | TF-IDF local ingesta/recupera/cita y ACL por rol; falta E2E final con corpus malicioso |
+| 21 | Logs y métricas operativos | PARTIAL | Logs JSON, correlación, health/readiness y métricas internas; sin backend externo/alert delivery |
+| 22 | Sin secretos en repositorio | PENDING | Plantilla/preflight y redacción existen; falta scan final de árbol, historia e imágenes |
+| 23 | Licencias revisadas | PARTIAL | Core y licenses locales inventariados; vendors/full y Activepieces requieren revisión legal final |
+| 24 | Documentación coherente | PARTIAL | Juego operativo actualizado; falta incorporar resultados finales y renderizar PDF/HTML |
+| 25 | Instalación limpia reproducible | PENDING | Locks/digests y preflight existen; falta instalación desde commit limpio |
+| 26 | Release versionada | PENDING | Etiquetas OCI/manifest implementados; falta commit, SemVer, manifest y bundle definitivos |
+| 27 | Funcional sin PrestaShop ni GHL | PARTIAL | Production core usa local/TF-IDF y no requiere credenciales; falta E2E final |
+| 28 | Proveedores externos desacoplados | PARTIAL | Interfaces/adaptadores y core sin egress; `full` no está certificado |
+| 29 | Portal probado visualmente | PARTIAL | Login y viewports 1280/375/320 validados sin overflow; falta recorrido visual final de todos los módulos |
+| 30 | Límites y alertas configurados | PENDING | Recursos/limits y reglas internas existen; alertas externas y umbrales de capacidad no cerrados |
 
-Solo se emplean los estados autorizados:
+**Resultado:** 6 `VERIFIED`, 14 `PARTIAL`, 10 `PENDING`. Un `PENDING` crítico en 11, 14, 15, 16, 22, 25 o 26 bloquea promoción.
 
-- `VERIFIED`: criterio probado de forma real, actual y reproducible contra la candidata evaluada.
-- `FIXED`: corrección implementada, todavía pendiente de verificación suficiente.
-- `IN PROGRESS`: verificación o corrección activa.
-- `BLOCKED`: el criterio no puede aprobarse por evidencia negativa, insuficiente o por una dependencia no cerrada.
-- `TODO`, `DEFERRED` y `NOT APPLICABLE`: únicamente cuando corresponda; un criterio de producción no se considera cumplido con estos estados.
+## Stop-ships actuales
 
-## Matriz de los 30 criterios de producción
+| ID | Bloqueo | Propietario de cierre | Evidencia exigida |
+|---|---|---|---|
+| SS-01 | Checkout no inmutable | Release | Commit limpio, tag SemVer y checksums |
+| SS-02 | Conjunto de imágenes finales no certificado | Release/Security | Redis ya PASS; faltan build con labels OCI, Trivy/SBOM y manifest del resto |
+| SS-03 | TLS/DNS/secretos reales ausentes | Operación/cliente | Cert leaf público con SAN, DNS, secrets rotados y preflight release PASS |
+| ~~SS-04~~ | ~~E2E final incompleto~~ | ~~QA~~ | **PASS 2026-08-15** — matriz E2E rol × módulo ejecutada sobre el stack candidato (`agent-candidate-0815`): 63 checks (7 roles × 9 endpoints de módulo) con acceso 200/403 exacto a la matriz RBAC declarada por el backend (`READ/OPERATOR/ADMIN_ROLES`), contratos de respuesta verificados (envelope de catálogo, dashboard role-aware con `permissions`), usuarios de prueba creados/desactivados/eliminados y stack devuelto a baseline. Detalle en §Evidencia SS-04. |
+| ~~SS-05~~ | ~~Restore/rollback integral sin ensayo final~~ | ~~SRE~~ | **PASS 2026-08-15** — ensayo integral sobre el PostgreSQL real del stack candidato (`agent-candidate-0815`): backup cifrado+HMAC+checksum (10.9 s), restore verificado a destino vacío aislado, RTO restore 25.2 s / rollback 25.1 s, checks funcionales (login, catálogo, wiki pública, alembic 0013) y rollback del safety backup que devuelve el estado exacto previo al restore. Detalle en §Evidencia SS-05. |
+| SS-06 | Rendimiento/soak final pendiente | SRE/QA | Carga acotada, restart y degradación Redis/DB |
+| SS-07 | Alert delivery externa ausente | Operación | Receptor, routing, prueba de alerta y guardia |
 
-| ID | Criterio obligatorio | Estado | Evidencia actual | Bloqueo para aprobarlo |
-|---:|---|---|---|---|
-| PR-01 | Cero defectos P0 abiertos | BLOCKED | RA-01 cerrado en `5677662`: `restore_to_url()` ya no invoca `drop_all()`, exige marker explícito (`prepare_restore_target`) y rechaza destinos poblados/sin marker con `RestoreSafetyError`; evals de regresión verdes (`test_audit_remediation_2026_08_10.py`). | Revalidar cero P0 sobre una release candidata identificada (versión + hash) con restore probado en instalación vacía. |
-| PR-02 | P1 críticos del núcleo corregidos | BLOCKED | Permanecen 11 P1 abiertos, todos de runtime/bloqueados (egress, proxy, Chatwoot, restore, recursos, release/perfiles, alcance/legal); dependencias (`7fb4f45`), observabilidad (`af53b8b`), lifecycle (`ff0eed8`), portal/docs (`33d77c1`) y quality gates (`ca73a6c`) verificados. | Cerrar P1 críticos con pruebas de regresión y evidencia runtime; no basta con código o health. |
-| PR-03 | Sin mocks en producción | BLOCKED | Stubs/mocks y demo están prohibidos por flags en production-like, pero no existe arranque completo del perfil production sin ellos. | Probar build/arranque production y proveedores locales reales sin fallback sintético. |
-| PR-04 | Sin datos demo visibles | BLOCKED | Whitelist de procedencia, seed opt-in y startup fail-closed pasan unit/integración; falta candidata y verificación API/chat/UI runtime. | Revalidar rutas cliente en build production y candidata sin datos heredados demo. |
-| PR-05 | Aislamiento entre clientes probado | BLOCKED | 14 modelos, ORM y 12 FKs compuestas pasan matriz cruzada y PostgreSQL; el ciclo de vida (export/erase) está aislado entre instalaciones (`ff0eed8`); archivos, RAG y E2E completo siguen abiertos. | Completar matriz de todos los recursos y canales en la candidata, incluida exfiltración RAG. |
-| PR-06 | Confirmaciones seguras | BLOCKED | Token/hash/caducidad/actor/replay y concurrencia PostgreSQL están verificados; el inbox durable con lease/checkpoints, la recuperación del crash ambiguo tras efecto externo (D-035, `5a3edf8`) y la reconciliación GHL previa al efecto (D-010, `ce2723c`) están verificados; el E2E de chat sigue abierto. | Ejecutar chat→quote→confirmación visible sobre la candidata y el fault injection live contra el proveedor (B-004). |
-| PR-07 | Migraciones no destructivas | BLOCKED | RA-02 cerrado en `5677662`: `0006_product_embeddings.py` es dialect-aware (pgvector/Vector/FK tenant-safe en PostgreSQL, no-op en SQLite); 24 evals de migración verdes (clean/upgrade/downgrade). | Revalidar clean/upgrade/downgrade sobre PostgreSQL real y restore completo de una candidata versionada. |
-| PR-08 | Cálculos deterministas | BLOCKED | Contratos cubren variante, scopes, precedencia segura, fiscalidad, redondeo, envío y stock; faltan sandbox autorizado, paginación >500 y producto oculto/no vendible. | Cerrar D-033/D-034 y contrastar golden cases con una fuente autorizada. |
-| PR-09 | Operaciones idempotentes | BLOCKED | RA-03 cerrado en `5677662`: toda rama temprana transiciona a `completed` y un `try/finally` defensivo cierra checkpoints en `processing`; el replay del mismo `message_id` devuelve 200 con resultado cacheado (eval verde). La reconciliación GHL previa al efecto (D-010) y el crash ambiguo con checkpoint (D-035) siguen verificados. | Ejecutar replay/takeover/crash/concurrencia sobre la candidata y fault injection live contra proveedores (B-004). |
-| PR-10 | Permisos efectivos en backend | BLOCKED | Auth fue verificada, pero RBAC quedó solo parcialmente cubierto y no existe matriz completa de rutas, recursos, tenants y carreras. | Probar cada permiso sensible en backend, incluida escalada, enumeración, service accounts y aprobación. |
-| PR-11 | Stack production arrancando limpio | BLOCKED | Perfil **core** levantado limpio con Docker: bridge-db/redis/api/portal healthy y reverse-proxy healthy con SETUID (sin `setuid EPERM`); opcionales en 502 graceful. | Perfil full/production con reinicios repetidos y arranque desde volúmenes nuevos. |
-| PR-12 | Servicios esenciales funcionales | BLOCKED | Smoke funcional por proxy (no solo health): portal 200, `/api/bridge/ready` 200, flowwink 200; degradación explícita de opcionales (chatwoot/activepieces 502 en core). | Smoke E2E del perfil full con integraciones reales y ruta de salida (egress) verificada. |
-| PR-13 | Tests críticos aprobados | BLOCKED | Corpus recuperado: unit 23, integración 35, migraciones 24 y regresión 222 passed + 9 skips opt-in/live (E2E Docker, PrestaShop live, preflight Windows, PostgreSQL opt-in); quality gates D-030 PASS (ruff-hard 0, clean-zone 0, ratchet 243 = baseline 243). | Repetir PostgreSQL/Redis/runtime/E2E sobre la candidata; los 9 skips dependen de runtime/credenciales live. |
-| PR-14 | E2E principales aprobados | BLOCKED | No se ejecutaron E2E de chat, comercio, Chatwoot, PrestaShop, GHL, Portal o restore; Playwright quedó bloqueado. | Ejecutar E2E internos y sandboxes autorizados con evidencia visible y estados finales comprobados. |
-| PR-15 | Backup restaurado | BLOCKED | Restauración REAL verificada con `backup.py` (manifiesto con conteos+sha256) en SQLite y PostgreSQL efímero (`6b34200`); el script de contenedor cubre pg_dump/volúmenes/cifrado. | Medir RPO/RTO y restaurar en instalación vacía con flujos completos en la release. |
-| PR-16 | Rollback probado | BLOCKED | `rollback_installation` restaura datos por instalación preservando el resto (`6b34200`); rollback de esquema cubierto por Alembic (P0). | Probar rollback de aplicación+esquema sobre una release versionada con imágenes por digest. |
-| PR-17 | Agentes limitados a herramientas autorizadas | BLOCKED | Executor deny-by-default verificado en rama (`4d97449`, 10 evals: allowlist, matriz cruzada, inyección, IVA no fijable, roles y auditoría); falta revalidar sobre la candidata y la cancelación del runner (F04-05). | Revalidar la policy en la candidata y cerrar cancelación/kill switch del runner. |
-| PR-18 | Facturación automática desactivada | BLOCKED | No se aportó una prueba production fail-closed ni un E2E que impida emisión sin permiso, aprobación y confirmación explícita. | Configuración segura, controles backend y tests de emisión no autorizada; ninguna factura real durante la prueba. |
-| PR-19 | Publicaciones con aprobación | BLOCKED | SEO/landing/publicación no están implementados o verificados y no existe evidencia de bloqueo automático por defecto. | Política común de aprobación y E2E aislado que rechace publicar sin permiso/aprobación. |
-| PR-20 | RAG aislado y con citas | BLOCKED | Clasificación public/internal/confidential/restricted con ACL deny-by-default, DLP determinista (DNI/NIE con letra, tarjeta con Luhn, IBAN mod-97, JWT, AWS, sk_live, claves privadas), redacción en respuesta/citas, rechazo de consultas con patrones de inyección y marcado `trusted=false` del contenido recuperado (`0541650`). | Sandbox del proveedor RAG real (B-006) y dataset de exfiltración a escala real. |
-| PR-21 | Logs y métricas operativos | BLOCKED | Logs JSON correlacionados con contextvars, redacción determinista por clave y valor, métricas Prometheus para HTTP/outbox/breaker/RAG/alertas y reglas in-memory (`circuit_breaker_open`, `outbox_dead_letter_growth`, `rag_abstention_rate`, `dlp_findings`) integradas en `/metrics` con `recent`/`evaluated`; verificado con fault injection sin filtrar PII ni secretos (`af53b8b`). | OTel/Prometheus scrape y SLO formales (Fase 25). |
-| PR-22 | Sin secretos en repositorio | BLOCKED | `.env` está ignorado/no trazado y el working tree P0 no contiene patrones de alta señal; faltan historial completo original, candidata y artefactos. | Escaneo de working tree, historial disponible y artefacto final; rotación documentada si aparece cualquier secreto. |
-| PR-23 | Licencias revisadas | BLOCKED | Hay rutas EE de Chatwoot/Activepieces, notice contradictorio, falta licencia raíz y no se inventariaron modelos/SBOM. | Matriz, notices, SBOM y revisión legal/comercial de la release concreta. |
-| PR-24 | Documentación coherente | BLOCKED | README reescrito contra la fuente autoritativa y banners SUPERSEDED en `REMEDIATION_REPORT.md`, `MASTER_PLATFORM_REPORT.md`, `FINAL_REPORT.md` y `COMMERCIAL_READINESS_REPORT.md` (`33d77c1`). | Doc/link/claim lint automatizado contra la candidata (Fase 29). |
-| PR-25 | Instalación limpia reproducible | BLOCKED | El build `--no-cache --pull` se abortó al 95,3 % de RAM; no hay una instalación limpia aprobada. | Build e instalación desde cero en host dimensionado, con comandos, tiempos, hashes y smoke test. |
-| PR-26 | Release versionada | BLOCKED | La auditoría no tenía Git; ahora existe rama/commit base, pero no hay candidata SemVer, tag, imágenes inmutables ni manifiesto aprobado. | Generar release candidata trazable, tag, digests, checksums, SBOM y release notes. |
-| PR-27 | Sistema funcional sin PrestaShop ni GHL | BLOCKED | RA-04 cerrado en `5677662`: `_default_catalog_source()` usa el catálogo local visible cuando PrestaShop no está configurado; los 4 evals de catálogo de `test_commerce.py` pasan con fuente agnóstica (`catalog_full_list`, `prestashop`/`local`/`import`). | Completar LocalCatalogProvider/LocalCRMProvider reales y el E2E chat→lead→presupuesto→pedido borrador sin dependencias externas ni demo (Fase B). |
-| PR-28 | Proveedores externos desacoplados | BLOCKED | Hay adaptadores con retry/backoff común, circuit breakers por proveedor, outbox durable con DLQ, captura GHL reencolada con checkpoints (`3733bad`) y reconciliación GHL previa al efecto (`ce2723c`); faltan credenciales, egress probado y contratos live de sustitución/degradación. | Contratos comunes, proveedores locales, timeouts/retries/circuit breaker y tests contractuales de sustitución/degradación. |
-| PR-29 | Portal probado visualmente | BLOCKED | Typecheck/build verdes; los cinco anchors rotos corregidos con secciones reales y runner vitest + testing-library + vitest-axe con 5 evals (incluida accesibilidad axe) verdes (`33d77c1`). | E2E visual/funcional en viewports acordados (Fase 19). |
-| PR-30 | Límites y alertas configurados | BLOCKED | Límites `deploy.resources` (CPU/mem/pids) aplicados por servicio y verificados con `docker inspect`; host ~3,9 GB libres con core arriba (antes 95 %); alertas operativas en `/metrics` (D-028). | Soak con carga y validación de alertas/umbrales del perfil full. |
+### Evidencia SS-05 — ensayo integral backup/restore/rollback (2026-08-15)
 
-**Resultado:** `0/30` criterios `VERIFIED`. Los 30 criterios permanecen `BLOCKED`; por tanto, no existe base técnica para promover, vender o operar la plataforma como producción.
+Ensayo completo ejecutado contra el **PostgreSQL real del stack candidato**
+(`agent-candidate-0815`, esquema Alembic `0013`, instalación
+`candidate-0815`) usando la herramienta de SRE del repositorio
+(`scripts/backup-restore-integral.py`, formato 4 cifrado AES-256-CBC +
+HMAC-SHA256 + SHA256SUMS externo).
 
-## Stop-ship vigentes
+| Fase | Comando / acción | Resultado | Duración |
+|---|---|---|---|
+| Marcadores pre-backup | Insert SQL `ss05-cust`, `SS05-MARKER-001`, `ss05-wiki` | 1 por tabla | — |
+| Backup | `backup candidate-0815 --profile core` | `restore=PASS`; artefacto `candidate-0815-20260815T142452Z-27d46d8c.tar.gz.enc` (+ `.hmac`, `.sha256`) | **10.9 s** |
+| Escritura post-backup | Insert SQL `SS05-POST-BACKUP` | Presente en origen | 14:25:26Z |
+| Restore | `restore candidate-0815 <artefacto>` (verify a destino vacío aislado + safety backup + in-place) | `restore=PASS`; safety `candidate-0815-20260815T142541Z-1d27d97f.tar.gz.enc` | **RTO 25.2 s** (14:25:39→14:26:04Z) |
+| Checks funcionales | `alembic_version=0013`; conteos; login admin; `GET /catalog/products?query=SS05`; wiki pública | 200 OK; marcador pre-backup presente; `SS05-POST-BACKUP` **ausente** (RPO) | — |
+| Rollback | `restore candidate-0815 <safety backup>` | `restore=PASS`; estado previo al restore recuperado: `SS05-POST-BACKUP` vuelve a estar presente, `products=3` | **25.1 s** (14:26:24→14:26:49Z) |
+| Limpieza | Delete SQL de marcadores | Stack en estado base (products=1, customers=1, wiki=1); 5/5 healthy | — |
 
-La promoción queda prohibida mientras exista cualquiera de estas condiciones:
+**RPO medido:** el punto de recuperación coincide con el snapshot del backup
+(los marcadores pre-backup sobreviven y el marcador post-backup se pierde en
+el restore, como exige el modelo de punto-en-el-tiempo).
 
-1. Cualquier regresión P0 en demo, confirmación, precio/impuesto/stock, migración o aislamiento.
-2. Operaciones sensibles/externas sin inbox/outbox, lease, idempotencia y auditoría atómica.
-3. RAG sin ACL deny-by-default o productos/precios ocultos expuestos por rutas cliente.
-4. Restore y rollback de release no probados.
-5. Egress/ingress, E2E crítico, build reproducible, permisos, dependencias o licencias sin verificar.
+**RTO medido (stack real):** restore a salud completa **25.2 s**; rollback
+vía safety backup **25.1 s**. El RTO se mide sobre un catálogo pequeño
+(~200 filas); el escalado con volumen de datos queda cubierto por SS-06.
 
-## Condición para cambiar la decisión
+### Evidencia SS-04 — matriz E2E rol × módulo del portal (2026-08-15)
 
-La decisión solo puede actualizarse después de evaluar una release candidata identificada por versión y hash. Cada fila debe enlazar evidencia actual de tests y runtime; `FIXED`, documentación, compilación, health checks, tests con mocks o configuración declarativa no sustituyen `VERIFIED`.
+Driver nuevo `scripts/e2e_role_matrix.py` ejecutado contra el proxy del stack
+candidato (`http://127.0.0.1:19020/api/bridge`): crea un usuario por rol
+(prefijo `e2erm-*`), recorre los nueve endpoints de los seis módulos del
+portal con cada rol, verifica el código esperado y el contrato mínimo de cada
+módulo, y desactiva los usuarios al terminar.
 
-Si se detecta un P0, secreto, acceso cruzado, migración destructiva, confirmación insegura, backup no restaurado, permiso insuficiente, E2E crítico pendiente o build no reproducible, la decisión debe permanecer exactamente `NOT PRODUCTION READY — CRITICAL RISK`.
+| Dimensión | Valor |
+|---|---|
+| Checks | **63/63 PASS** (7 roles × 9 endpoints) en **5.27 s** |
+| Catálogo + dashboard | 200 para los 7 roles (tier `READ_ROLES`) |
+| Clientes / ventas (leads, presupuestos, pedidos) / wiki | 200 para admins + supervisor/commercial/support/operator; **403 para `viewer`** (tier `OPERATOR_ROLES`) |
+| Tareas programadas + usuarios | 200 solo `provider_admin` y `client_admin`; 403 para el resto (tier `ADMIN_ROLES`) |
+| Contratos | envelope `{items,total}` del catálogo; dashboard role-aware (`role` + `permissions.approve/manage_users` correctos por rol); clave `items` en listas |
+| Limpieza | usuarios desactivados vía `PATCH /users/{id}` y filas eliminadas por SQL → baseline `users=2`; stack 5/5 healthy; `/ready` 200 |
+| Artefacto | `logs/rehearsal/e2e_role_matrix_20260815T145447Z.json` (gitignored) |
+
+La matriz confirma en vivo que el portal no decide permisos por su cuenta:
+los 403/200 observados coinciden uno a uno con `security.require_roles`.
+
+## Alcance que podría promocionarse
+
+Solo el perfil `production` core, con proveedores externos desactivados, publicación exclusivamente local y aprobada, email en spool manual por defecto (con SMTP propio opcional vía `EMAIL_PROVIDER=smtp`, implementado pero pendiente de certificación con el proveedor real), facturas como borradores y SEO estático sobre HTML suministrado. `full`, Chatwoot, FlowWink, Activepieces, PrestaShop, GHL, SMTP/API de correo, crawler SEO y publicación externa requieren certificación separada.
+
+## Regla de reevaluación
+
+El responsable de release debe adjuntar los comandos/resultados de todos los stop-ships, actualizar esta matriz y elegir exactamente una de las cuatro decisiones permitidas. No se heredan estados verdes de un runtime de desarrollo ni de informes anteriores.

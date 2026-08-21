@@ -7,10 +7,12 @@ documentación), salvo que se indique lo contrario por escrito.
 Componentes de terceros
 -----------------------
 Este producto incorpora software de terceros bajo sus propias licencias
-(MIT, BSD-3, Apache-2.0, HPND, Unlicense, LGPL-3 con excepciones, y los
-componentes vendor FlowWink [MIT], Chatwoot [MIT Community Edition] y
-Activepieces [MIT Community Edition]). El detalle, atribución y restricciones
-están en `THIRD_PARTY_NOTICES.md` y `docs/LICENSE_MATRIX.md`.
+(entre otras, MIT, BSD-2/3, Apache-2.0, HPND, Unlicense y LGPL-3 con
+excepciones). FlowWink y Chatwoot son componentes opcionales fijados a commits
+con sus licencias locales; Activepieces es una imagen opcional cuya licencia y
+contenido exactos deben verificarse antes de cualquier uso o distribución del
+perfil `full`. El detalle, atribución y restricciones están en
+`THIRD_PARTY_NOTICES.md` y `docs/LICENSE_MATRIX.md`.
 
 Reserva
 -------
@@ -19,4 +21,4 @@ redistribución del código propio sin autorización expresa. Las rutas
 *enterprise* de los componentes vendor quedan excluidas y su habilitación o
 distribución comercial requiere revisión legal previa (B-008).
 
-Actualizado 2026-08-04.
+Actualizado 2026-08-15.

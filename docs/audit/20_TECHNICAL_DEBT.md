@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 20 - Deuda técnica
 
 | ID | Deuda | Principal | Interés actual | Prioridad | Esfuerzo | Pago recomendado |
@@ -27,4 +29,3 @@
 5. TD-09/11/14/15: producto repetible/comercial.
 
 Evitar un “big-bang refactor”: primero tests de regresión P0, luego cambios por vertical y migraciones compatibles.
-

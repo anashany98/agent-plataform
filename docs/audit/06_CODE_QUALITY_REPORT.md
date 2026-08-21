@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 06 - Calidad de código
 
 ## Resultado ejecutivo
@@ -87,4 +89,3 @@ Todo el código propio Python/TypeScript/CSS, migración, tests, scripts, Docker
 - Un pipeline actual no bloquearía defectos: no hay CI local visible y todos los quality gates salvo tests/typecheck/build fallan.
 - Añadir pruebas de regresión antes de corregir P0; luego separar dominio, actualizar ORM typing y fijar dependencias.
 - Ejecutar escaneo de imagen/SBOM en una ventana con RAM segura.
-

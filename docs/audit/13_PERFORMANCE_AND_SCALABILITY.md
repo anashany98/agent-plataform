@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 13 - Rendimiento y escalabilidad
 
 ## Alcance medido
@@ -67,4 +69,3 @@ No se estiman RPS, conversaciones/segundo, RPO/RTO ni coste monetario sin medici
 ## Archivos revisados, riesgos y pendiente
 
 Código de queries, adapters, workers, Compose/stats/DB. El riesgo es escalar una topología inestable multiplicando coste y fallos. Benchmarks quedan BLOCKED hasta estabilizar y aislar recursos.
-

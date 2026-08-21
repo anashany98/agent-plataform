@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 05 - Revisión de arquitectura
 
 ## Veredicto arquitectónico
@@ -125,4 +127,3 @@ Compose/overrides, proxy, modelos, rutas, servicios, scripts de ciclo de vida y 
 - No hay egress controlado: hay aislamiento, pero también inutilidad funcional.
 - Actualización y recuperación no cumplen independencia real.
 - Pendiente: prueba de aislamiento con dos instalaciones ficticias, destrucción segura y sandbox e2e.
-

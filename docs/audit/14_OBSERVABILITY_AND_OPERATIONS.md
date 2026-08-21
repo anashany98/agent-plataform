@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 14 - Observabilidad y operación
 
 ## Veredicto
@@ -58,4 +60,3 @@ La observabilidad es **NOT IMPLEMENTED** como sistema. Hay health checks y regis
 ## Archivos revisados, riesgos y pendiente
 
 Health checks, logs focalizados, audit/cost code, scripts y documentación. Sin observabilidad, soporte no puede prometer SLA ni detectar el flujo roto actual. Implementación y soak test quedan pendientes.
-

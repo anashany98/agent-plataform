@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 15 - Recuperación, backup y actualizaciones
 
 ## Clasificación
@@ -63,4 +65,3 @@
 ## Archivos revisados, riesgos y pendiente
 
 Scripts Bash/PowerShell, Compose/volúmenes, migración y docs anteriores. Riesgo P1: una copia no restaurada no es protección. La prueba destructiva controlada queda BLOCKED por recursos y convención de instalación.
-

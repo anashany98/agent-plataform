@@ -105,6 +105,37 @@ POST /integrations/prestashop/sync?limit=300&dry_run=true&include_details=true
 
 La sincronización incluye características, combinaciones, existencias y reglas de precio disponibles. Los importes fiscales siguen la configuración de cada instalación y deben validarse con el cliente.
 
+**Sync incremental programado (cron diario)**: `scripts/prestashop-sync-incremental.py`
+actualiza solo los productos modificados desde el último sync, sin reindexar el
+catálogo completo (el bridge indexa únicamente los productos nuevos del delta).
+El instante de referencia se deriva de `max(updated_at)` de los productos
+`prestashop` en la BD (menos `PRESTASHOP_SYNC_OVERLAP_MINUTES`, 10 por defecto).
+Ejemplo de entrada de cron (`crontab -e`):
+
+```bash
+30 4 * * * cd /ruta/a/agent-plataform && python3 scripts/prestashop-sync-incremental.py >> logs/prestashop-sync.log 2>&1
+```
+
+Nota: el webservice de la tienda no admite `filter[date_upd]` ni ordenar por
+fecha, así que el delta se detecta paginando el listado ligero `[id,date_upd]`
+(≈ 50 s para 41k productos) y solo se recuperan en detalle los ids modificados.
+
+Cada ejecución del sync (manual o cron) queda registrada en la tabla
+`prestashop_sync_history` (inicio, duración, ventana `since`, conteos y estado).
+Dos syncs concurrentes no pueden solaparse: el endpoint toma un lock Redis
+(`bridge:prestashop:sync`, TTL configurable `PRESTASHOP_SYNC_LOCK_SEC`, 1.800 s
+por defecto) y el segundo recibe `409` y se registra como `skipped`. Si Redis no
+está disponible el sync continúa sin lock (fail-open, como el outbox worker).
+Para verificar que el cron corre cada día:
+
+```bash
+# el propio script confirma el registro al terminar (línea HISTORIAL)
+python scripts/prestashop-sync-incremental.py
+# o por API
+curl -s -H "Authorization: Bearer <token>" \
+  http://localhost:9000/api/bridge/integrations/prestashop/sync/history?limit=10
+```
+
 ## Copias y restauración
 
 Las copias integrales requieren una contraseña de cifrado:
@@ -125,6 +156,8 @@ La restauración debe ensayarse en una instalación vacía antes del piloto.
 - `docs/INSTALLATION.md`
 - `docs/BACKUP_RESTORE.md`
 - `docs/API_REFERENCE.md`
+- `docs/SESSION_LOG_CRM_2026-08-16.md`
+- `docs/HANDOFF_CONTINUACION_CRM.md`
 - `STATUS.md`
 - `TASKS.md`
 

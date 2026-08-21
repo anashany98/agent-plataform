@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 11 - Tests faltantes
 
 ## P0 antes de cualquier piloto
@@ -60,4 +62,3 @@
 ## Estado y bloqueos
 
 Los tests locales pueden añadirse ya. Sandbox/E2E/DR/Playwright están BLOCKED por credenciales, fallos de red/proxy/Chatwoot y RAM > 90 %. No deben sustituirse por mocks para declarar éxito.
-

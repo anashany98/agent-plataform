@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 04 - Mapa de dependencias
 
 ## Grafo operacional
@@ -52,4 +54,3 @@ Manifiestos, locks, Dockerfiles, Compose, adaptadores, imports, vendor focalizad
 - Supply chain no reproducible y avisos de versiones obsoletos.
 - SBOM/escaneo de imagen BLOCKED por RAM de host > 90 %.
 - Falta matriz de compatibilidad entre versiones de vendor y contratos API.
-

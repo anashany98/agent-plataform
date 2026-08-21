@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # Evidencia de análisis estático
 
 | Herramienta | Resultado |
@@ -14,4 +16,3 @@
 Ruff por regla: UP006 120, B008 90, UP007 34, UP035 21, F401 9, I001 7, E702 5, B905 4, E402 3, UP017 2, E701 1, F811 1.
 
 MyPy por archivo: `main.py` 51, `rag_service.py` 12, `deterministic_tools.py` 6, models 1, import 1.
-

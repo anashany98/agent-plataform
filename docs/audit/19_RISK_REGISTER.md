@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 19 - Registro de riesgos
 
 | ID | Riesgo / causa | Prob. | Impacto | Nivel | Señal/trigger | Mitigación | Owner recomendado | Residual |
@@ -25,4 +27,3 @@
 - R-03/R-05/R-06/R-09/R-10/R-11/R-12/R-14 bloquean piloto controlado.
 - Ningún riesgo se acepta por defecto; aceptación residual requiere responsable y fecha.
 - No se asignan probabilidades numéricas por falta de datos históricos.
-

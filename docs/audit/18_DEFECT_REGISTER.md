@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 18 - Registro de defectos
 
 Escala: P0 crítica, P1 alta, P2 media, P3 baja. Esfuerzo: XS <4 h, S 1 día, M 2–5 días, L 1–3 semanas, XL >3 semanas.
@@ -40,4 +42,3 @@ Escala: P0 crítica, P1 alta, P2 media, P3 baja. Esfuerzo: XS <4 h, S 1 día, M 
 - No todos los defectos son independientes: D-001/003/004 forman el riesgo transaccional principal; D-006 bloquea todas las integraciones.
 - La prioridad de corrección no autoriza activar flujos reales antes de completar tests de aceptación.
 - Escaneos de imagen pueden añadir defectos; quedaron BLOCKED por recursos.
-

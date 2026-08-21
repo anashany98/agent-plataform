@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # Evidencia de cobertura
 
 ```text
@@ -23,4 +25,3 @@ TOTAL: 2361 statements, 783 miss, 67 %
 | rag_service | 45 % |
 
 Frontend: cobertura NOT IMPLEMENTED.
-

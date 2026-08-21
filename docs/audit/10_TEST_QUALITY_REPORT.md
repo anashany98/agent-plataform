@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 10 - Calidad de tests
 
 ## Ejecución reproducida
@@ -64,4 +66,3 @@ Leyenda: `M` usa mock/stub/demo; `E` comprueba efecto persistente; `FP` tiene ri
 ## Archivos revisados, riesgos y pendiente
 
 Se revisaron `conftest.py` y los cinco módulos de tests completos. La suite es útil como regresión local, pero no justifica un piloto. Debe separarse en unit, PostgreSQL integration, contract sandbox y e2e, y eliminar lenguaje “verified” donde no existe procedencia.
-

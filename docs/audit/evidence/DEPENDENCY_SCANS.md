@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # Evidencia de dependencias
 
 ## Python
@@ -27,4 +29,3 @@ El fix propuesto por npm requiere Vite 8.2.0 (salto mayor).
 ## Imágenes
 
 Docker Scout está disponible, pero el scan quedó BLOCKED al superar el host 90 % de RAM. No se inventa resultado.
-

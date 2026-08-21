@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 09 - Gap analysis del MVP de Ofideep
 
 ## Veredicto
@@ -95,4 +97,3 @@
 ## Archivos revisados, riesgos y pendiente
 
 Se revisaron webhook principal, servicios deterministas, todos los adapters, router LLM, RAG, modelos, tests contractuales y vendor Chatwoot focalizado. Riesgo central: cotizar/confirmar datos inventados o incorrectos. Pendiente: credenciales y sandboxes ficticios, red corregida y un e2e reproducible.
-

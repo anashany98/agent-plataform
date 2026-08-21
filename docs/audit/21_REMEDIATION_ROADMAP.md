@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 21 - Roadmap de remediación
 
 ## Inmediato - 0 a 7 días
@@ -54,4 +56,3 @@
 - Piloto controlado: **40–60 persona-días** más disponibilidad de sandboxes/credenciales y revisión legal; aproximadamente 4–8 semanas calendario con equipo paralelo.
 - Producto comercial repetible: adicional **3–6 persona-meses**, sin incluir HA/SaaS avanzado.
 - Rango, no compromiso: debe recalibrarse tras resolver P0 y medir runtime estable.
-

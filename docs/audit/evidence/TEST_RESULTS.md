@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # Evidencia de tests
 
 Fecha: 2026-08-02.
@@ -22,4 +24,3 @@ Warnings relevantes:
 - Pytest no pudo crear `.pytest_cache` porque los tests estaban protegidos read-only; no afecta al resultado.
 
 Límite: SQLite, demo, mocks/stubs, TF-IDF local y rate limit deshabilitado. No es E2E externo.
-

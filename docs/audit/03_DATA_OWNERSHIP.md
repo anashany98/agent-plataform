@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 03 - Propiedad y flujo de datos
 
 ## Decisión de fuente de verdad recomendada
@@ -52,4 +54,3 @@ Modelos SQLAlchemy, servicio determinista, seed, rutas de Chatwoot/PrestaShop/GH
 - **P1:** no hay ciclo de vida de reserva ni reconciliación.
 - **P1:** documentación contradictoria impide responsabilidad operativa.
 - Pendiente: definir contrato de ownership aprobado por producto/legal y ejecutar pruebas con sandbox PrestaShop/GHL.
-

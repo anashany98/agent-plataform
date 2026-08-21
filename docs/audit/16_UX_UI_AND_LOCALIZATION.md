@@ -1,3 +1,5 @@
+> **SUPERSEDED — NO UTILIZAR PARA DECISIONES ACTUALES.** Evidencia histórica de una fase/commit anterior. Se conserva para trazabilidad; el estado vigente está en `docs/PRODUCTION_READINESS.md` y los informes de 2026-08-15.
+
 # 16 - UX, UI y localización
 
 ## Alcance y honestidad
@@ -66,4 +68,3 @@ No implementa pantallas de productos, documentos, agentes, automatizaciones o us
 ## Archivos revisados y pendiente
 
 `App.tsx`, CSS, i18n, HTML, Nginx, package/lock y salida build. Las capturas no se fabricaron; quedan BLOCKED hasta liberar recursos y reparar el arnés.
-
