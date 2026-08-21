@@ -2,6 +2,13 @@
 
 Todos los cambios relevantes de la remediación se documentan aquí. El proyecto adopta SemVer cuando exista una primera candidata reproducible.
 
+## [Endurecimiento de arranque, dev-ops y modularización — 2026-08-21]
+
+- **Seguridad de arranque (T-076):** `INSTALLATION_ID="development-local"` ahora es rechazado en producción (fail-closed, B-03); `seed_database()`/`AUTO_CREATE_SCHEMA` se ejecutan en el lifespan vía `initialize_database()` y no en import-time (B-04); 9 bloques `except Exception` que tragaban la causa raíz ahora registran warning estructurado (B-05). Test nuevo en `test_p1_secure_env.py`.
+- **Dev-ops (T-077):** entorno dev migrado a Python 3.12.10 (`.venv` recreado; los 2 tests dependientes de versión ya corren; la auditoría del lock se documenta como skip en Windows por uvloop Linux-only y corre en CI ubuntu); `verify-vendor-pins.py` cableado a `make check` (condicional a `vendor/`) y al job compose del CI; README y `docs/ARCHITECTURE.md` sincronizados con la realidad (migraciones `0001…0026`, corpus 750/12, portal 113).
+- **Modularización backend (T-078, en curso):** creado `app/routers/` con helper de auditoría compartido (`common.py`) y routers `appearance.py` + `system.py`; handlers movidos tal cual con suite verde tras cada fase.
+- **Git/CI (T-079):** working tree commiteado y push a `origin` (`production-remediation` + nueva `remediation-sweep`); primer run real de `production-gates.yml` en GitHub.
+
 ## [Órdenes de acción por módulo en el chat — 2026-08-18]
 
 - **T-075 (Chat/CRM, VERIFIED):** el CEO agent pasa de informar a **actuar**

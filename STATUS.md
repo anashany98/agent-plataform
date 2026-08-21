@@ -1,5 +1,14 @@
 # Estado autoritativo del proyecto
 
+> **Endurecimiento de arranque, dev-ops y modularización (2026-08-21):**
+> filas **T-076→T-079** — B-03/B-04/B-05 cerrados (INSTALLATION_ID
+> fail-closed, seed a lifespan, logging en excepciones tragadas), B-06
+> dev en Python 3.12.10 con suite verde, B-07 pins de vendor en gates,
+> D-01/D-02 docs sincronizadas, push a origin y primer run de CI en
+> GitHub. B-01 iniciado: `app/routers/` con `common.py`, `appearance.py`
+> y `system.py`. Corpus **750 passed / 12 skipped**; portal 113 vitest +
+> tsc; gates D-030 PASS.
+
 > **Órdenes de acción por módulo en el chat (2026-08-18):** fila
 > **T-075**, VERIFIED — el CEO agent **actúa** desde el chat: crear un
 > lead, mover una oportunidad de etapa, crear una tarea y lanzar una
