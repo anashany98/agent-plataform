@@ -7,7 +7,7 @@ import pytest
 from app.config import settings
 from app.database import SessionLocal, get_db
 from app.main import app
-from app.models.models import AuditLog, DailyLLMBudget, RAGChunk, RAGDocument
+from app.models.models import AuditLog, DailyLLMBudget, IdempotencyRecord, RAGChunk, RAGDocument
 from app.services.llm_router import LLMRouterService, ProviderResult
 from app.services.rag_service import RAGService
 from fastapi import HTTPException
@@ -43,7 +43,7 @@ def test_d013_activepieces_2xx_without_execution_id_is_not_reported_as_success(
     workflow_name = f"contract-{uuid.uuid4().hex}"
     response = client.post(
         "/api/bridge/workflows/trigger",
-        headers=auth_headers,
+        headers={**auth_headers, "Idempotency-Key": f"d013-{uuid.uuid4().hex}"},
         json={
             "webhook_path": "/synthetic-contract",
             "workflow_name": workflow_name,
@@ -68,6 +68,55 @@ def test_d013_activepieces_2xx_without_execution_id_is_not_reported_as_success(
         f"éxito; http_status={response.status_code}, execution_id={body.get('execution_id')}, "
         f"successful_audits={successful_rows}"
     )
+
+
+def test_activepieces_inbound_webhook_requires_idempotency_and_redacts_secrets(
+    client,
+    auth_headers,
+):
+    missing = client.post(
+        "/webhooks/activepieces",
+        headers=auth_headers,
+        json={"event": "completed"},
+    )
+    assert missing.status_code == 428
+
+    raw_key = f"contract-{uuid.uuid4().hex}"
+    headers = {**auth_headers, "Idempotency-Key": raw_key}
+    payload = {"event": "completed", "api_token": "should-never-be-persisted"}
+    first = client.post("/webhooks/activepieces", headers=headers, json=payload)
+    replay = client.post("/webhooks/activepieces", headers=headers, json=payload)
+    conflict = client.post(
+        "/webhooks/activepieces",
+        headers=headers,
+        json={"event": "different"},
+    )
+
+    db = SessionLocal()
+    claim_key = f"activepieces-inbound:{raw_key}"
+    try:
+        record = db.query(IdempotencyRecord).filter(
+            IdempotencyRecord.idempotency_key == claim_key
+        ).one()
+        audits = db.query(AuditLog).filter(
+            AuditLog.id == first.json()["execution_id"]
+        ).all()
+        assert first.status_code == 200
+        assert replay.status_code == 200
+        assert replay.json() == first.json()
+        assert conflict.status_code == 409
+        assert record.state == "completed"
+        assert len(audits) == 1
+        assert audits[0].details["api_token"] == "[REDACTED]"
+    finally:
+        db.query(AuditLog).filter(AuditLog.id == first.json().get("execution_id")).delete(
+            synchronize_session=False
+        )
+        db.query(IdempotencyRecord).filter(
+            IdempotencyRecord.idempotency_key == claim_key
+        ).delete(synchronize_session=False)
+        db.commit()
+        db.close()
 
 
 def test_d014_billable_usage_cannot_be_recorded_as_zero_or_bypass_daily_budget(monkeypatch):

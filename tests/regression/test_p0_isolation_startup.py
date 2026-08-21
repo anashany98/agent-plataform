@@ -1,5 +1,4 @@
 import pytest
-
 from app.config import settings
 from app.models.models import (
     ApprovalRequest,

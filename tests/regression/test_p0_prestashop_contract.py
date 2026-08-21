@@ -314,6 +314,84 @@ def test_adapter_treats_tax_rules_group_zero_as_zero_not_default(monkeypatch):
     assert not any(resource in {"tax_rules", "taxes"} for resource, _params in fake_get.calls)
 
 
+def test_get_stocks_batch_paginates_until_eof():
+    """El stock en lote pagina hasta EOF: >500 filas no se truncan (D-033)."""
+
+    class PaginatedStock:
+        """Fake de servidor que respeta ``limit=offset,page_size``."""
+
+        def __init__(self, rows):
+            self.rows = rows
+            self.calls: list[tuple[str, dict[str, Any]]] = []
+
+        async def __call__(self, resource: str, params: dict[str, Any]):
+            self.calls.append((resource, dict(params)))
+            if resource == "stock_availables":
+                offset_s, size_s = str(params.get("limit", "0,500")).split(",")
+                offset, size = int(offset_s), int(size_s)
+                matched = [
+                    row
+                    for row in self.rows
+                    if str(row.get("id_product")) in str(params.get("filter[id_product]", ""))
+                ]
+                return {"stock_availables": [dict(r) for r in matched[offset : offset + size]]}
+            raise AssertionError(f"Recurso inesperado: {resource}")
+
+    rows = [
+        {
+            "id": str(1000 + i),
+            "id_product": "42",
+            "id_product_attribute": str(i),
+            "id_shop": "1",
+            "quantity": str(i),
+        }
+        for i in range(600)
+    ]
+    fake = PaginatedStock(rows)
+    adapter = _adapter(fake)  # type: ignore[arg-type]
+
+    result = asyncio.run(adapter.get_stocks_batch(["42"]))
+
+    assert result["42"] == sum(range(600))
+    stock_calls = [c for c in fake.calls if c[0] == "stock_availables"]
+    assert len(stock_calls) >= 2, "con >500 filas debe paginar más de una vez"
+
+
+def test_adapter_list_products_changed_since_filters_client_side():
+    """El sync incremental filtra por ``date_upd`` cliente-side.
+
+    El webservice de la tienda real no admite ``filter[date_upd]`` ni
+    ``sort=[date_upd_*]`` (500), así que el adaptador pagina el listado
+    ligero ``[id,date_upd]`` y compara las fechas en cliente. Devuelve
+    ``(productos_cambiados, stock_de_todo_el_catálogo)``.
+    """
+    old_product = {**deepcopy(PRODUCT), "date_upd": "2026-06-29 18:15:43"}
+    fake_get = OfficialWebserviceResponses(product=old_product)
+    adapter = _adapter(fake_get)
+
+    changed, stock_map = asyncio.run(
+        adapter.list_products_changed_since("2026-08-13 00:00:00")
+    )
+    assert changed == []
+    assert stock_map == {"42": 12}  # stock del catálogo completo, aunque no haya cambios
+    products_calls = [
+        params for resource, params in fake_get.calls if resource == "products"
+    ]
+    assert products_calls[0]["display"] == "[id,date_upd]"
+    assert "filter[date_upd]" not in products_calls[0]
+
+    new_product = {**deepcopy(PRODUCT), "date_upd": "2026-08-13 12:00:00"}
+    fake_get = OfficialWebserviceResponses(product=new_product)
+    adapter = _adapter(fake_get)
+
+    changed, stock_map = asyncio.run(
+        adapter.list_products_changed_since("2026-08-13 00:00:00")
+    )
+    assert len(changed) == 1
+    assert changed[0]["external_id"] == "42"
+    assert stock_map == {"42": 12}
+
+
 @pytest.mark.parametrize(
     ("country_id", "tax_rules"),
     [

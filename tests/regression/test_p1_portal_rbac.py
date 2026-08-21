@@ -113,14 +113,21 @@ def test_dashboard_is_role_aware(client, auth_headers, rbac_users) -> None:
     assert commercial.status_code == 200, commercial.text
     commercial_body = commercial.json()
     assert commercial_body["role"] == "commercial"
-    assert commercial_body["permissions"]["approve"] is True
+    assert commercial_body["permissions"]["approve"] is False
     assert commercial_body["permissions"]["manage_leads"] is True
     assert commercial_body["permissions"]["manage_users"] is False
     assert "pending_approvals" in commercial_body["counts"]
+    decision = client.post(
+        "/approvals/does-not-exist/approve",
+        headers=_auth(rbac_users["commercial_token"]),
+        json={},
+    )
+    assert decision.status_code == 403
 
     admin = client.get("/dashboard", headers=auth_headers)
     assert admin.status_code == 200, admin.text
     admin_body = admin.json()
+    assert admin_body["permissions"]["approve"] is True
     assert admin_body["permissions"]["manage_users"] is True
     assert admin_body["permissions"]["view_costs"] is True
     assert admin_body["permissions"]["import_catalog"] is True
@@ -155,6 +162,10 @@ def test_commercial_can_create_and_list_leads(client, rbac_users) -> None:
     from app.models.models import Lead
 
     email = f"{_unique('lead')}@example.invalid"
+    create_headers = {
+        **_auth(rbac_users["commercial_token"]),
+        "Idempotency-Key": _unique("lead-create"),
+    }
     created = client.post(
         "/leads",
         json={
@@ -163,12 +174,24 @@ def test_commercial_can_create_and_list_leads(client, rbac_users) -> None:
             "phone": "+34600111222",
             "company_name": "Portal Corp",
         },
-        headers=_auth(rbac_users["commercial_token"]),
+        headers=create_headers,
     )
     assert created.status_code == 200, created.text
     created_body = created.json()
     assert created_body["email"] == email
     assert created_body["status"] == "new"
+    replay = client.post(
+        "/leads",
+        json={
+            "email": email,
+            "first_name": "Cliente Portal",
+            "phone": "+34600111222",
+            "company_name": "Portal Corp",
+        },
+        headers=create_headers,
+    )
+    assert replay.status_code == 200
+    assert replay.json() == created_body
 
     listed = client.get("/leads", headers=_auth(rbac_users["commercial_token"]))
     assert listed.status_code == 200, listed.text
@@ -177,14 +200,20 @@ def test_commercial_can_create_and_list_leads(client, rbac_users) -> None:
     duplicate = client.post(
         "/leads",
         json={"email": email.upper(), "first_name": "Duplicado"},
-        headers=_auth(rbac_users["commercial_token"]),
+        headers={
+            **_auth(rbac_users["commercial_token"]),
+            "Idempotency-Key": _unique("lead-duplicate"),
+        },
     )
     assert duplicate.status_code == 409, duplicate.text
 
     invalid = client.post(
         "/leads",
         json={"email": "no-es-un-email", "first_name": "Malo"},
-        headers=_auth(rbac_users["commercial_token"]),
+        headers={
+            **_auth(rbac_users["commercial_token"]),
+            "Idempotency-Key": _unique("lead-invalid"),
+        },
     )
     assert invalid.status_code == 422, invalid.text
 

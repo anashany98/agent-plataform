@@ -10,6 +10,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from alembic.script import ScriptDirectory
 from app.config import settings
 from app.database import Base
 from app.models import models  # noqa: F401
@@ -37,6 +38,15 @@ def _alembic_config(database_url: str) -> Config:
     config.set_main_option("script_location", ALEMBIC_DIR.as_posix())
     config.set_main_option("sqlalchemy.url", database_url)
     return config
+
+
+HEAD_REVISION = ScriptDirectory.from_config(_alembic_config("sqlite://")).get_current_head()
+
+
+def test_backup_schema_version_tracks_alembic_head() -> None:
+    from app.services.backup import SCHEMA_VERSION
+
+    assert SCHEMA_VERSION == HEAD_REVISION
 
 
 @pytest.fixture
@@ -108,6 +118,19 @@ def _assert_schema_matches_models(engine: Engine) -> None:
             (constraint["name"], tuple(constraint["column_names"]))
             for constraint in inspector.get_unique_constraints(table_name)
         }
+        if engine.dialect.name == "sqlite" and table_name == "products":
+            # 0011 renombra la constraint de external_id a POR FUENTE en
+            # PostgreSQL; en SQLite es no-op por diseño (no soporta
+            # DROP/ADD CONSTRAINT y el rebuild de la tabla rompería las
+            # FKs de reservations/líneas -> products). El path de Alembic
+            # conserva la constraint legacy en SQLite; el path create_all
+            # (corpus) usa la del modelo. Se espera esa divergencia.
+            expected_unique_constraints.discard(
+                ("uq_product_installation_source_external_id", ("installation_id", "source", "external_id"))
+            )
+            expected_unique_constraints.add(
+                ("uq_product_installation_external_id", ("installation_id", "external_id"))
+            )
         assert expected_unique_constraints == actual_unique_constraints, table_name
 
         expected_check_constraints = {
@@ -360,7 +383,7 @@ def test_clean_install_upgrades_to_explicit_model_schema(sqlite_migration_contex
     command.upgrade(config, "head")
 
     _assert_schema_matches_models(engine)
-    assert _current_revision(engine) == "0008"
+    assert _current_revision(engine) == HEAD_REVISION
 
 
 def test_historical_0001_upgrade_backfills_tenant_and_lifecycle_data(
@@ -407,7 +430,7 @@ def test_historical_0001_upgrade_backfills_tenant_and_lifecycle_data(
         assert reservation.installation_id == MIGRATION_INSTALLATION_ID
         assert reservation.expires_at is not None
         assert reservation.released_at is not None
-    assert _current_revision(engine) == "0008"
+    assert _current_revision(engine) == HEAD_REVISION
 
 
 def test_historical_upgrade_fails_closed_without_installation_id(
@@ -705,7 +728,7 @@ def test_reupgrade_after_safe_downgrade_keeps_fixture(sqlite_migration_context) 
 
     _assert_schema_matches_models(engine)
     _assert_fixture_survives(engine)
-    assert _current_revision(engine) == "0008"
+    assert _current_revision(engine) == HEAD_REVISION
 
 
 def test_reupgrade_allows_managed_active_reservation(sqlite_migration_context) -> None:
@@ -736,7 +759,7 @@ def test_reupgrade_allows_managed_active_reservation(sqlite_migration_context) -
         assert reservation.status == "active"
         assert reservation.expires_at is not None
         assert reservation.installation_id == MIGRATION_INSTALLATION_ID
-    assert _current_revision(engine) == "0008"
+    assert _current_revision(engine) == HEAD_REVISION
 
 
 def test_0006_is_dialect_skip_on_sqlite(sqlite_migration_context) -> None:
@@ -762,4 +785,4 @@ def test_0006_is_dialect_skip_on_sqlite(sqlite_migration_context) -> None:
         "En SQLite la tabla product_embeddings NO debe crearse: el tipo "
         "vector no existe en este dialecto."
     )
-    assert _current_revision(engine) == "0008"
+    assert _current_revision(engine) == HEAD_REVISION

@@ -1,7 +1,7 @@
 def test_health_and_ready(client):
     health = client.get('/health')
     assert health.status_code == 200
-    assert health.json()['db_status'] == 'healthy'
+    assert health.json()['components']['database'] is True
     assert client.get('/ready').json() == {'status': 'ready'}
 
 

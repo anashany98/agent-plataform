@@ -341,7 +341,7 @@ class _EmptyListResponse:
 
 
 class _EmptyListClient:
-    async def __aenter__(self) -> "_EmptyListClient":
+    async def __aenter__(self) -> _EmptyListClient:
         return self
 
     async def __aexit__(self, *args: Any) -> None:

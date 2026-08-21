@@ -21,9 +21,12 @@ Hermetismo: SQLite efímero por test, fixtures sintéticos y sin red.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -41,8 +44,6 @@ from app.models.models import (
     RAGDocument,
 )
 from app.services.lifecycle import LegalHoldActive, LifecycleService
-from decimal import Decimal
-
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
@@ -64,6 +65,11 @@ def lifecycle_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LifecycleE
     from app import main as bridge_main
 
     monkeypatch.setattr(bridge_main.settings, "RAG_UPLOAD_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        bridge_main.settings,
+        "AUTOMATION_EMAIL_DIR",
+        str(tmp_path / "emails"),
+    )
     engine = create_engine(
         "sqlite+pysqlite://",
         connect_args={"check_same_thread": False},
@@ -94,6 +100,24 @@ def _seed_operational_data(env: LifecycleEnv, installation_id: str, *, tmp_path:
     upload_dir.mkdir(parents=True, exist_ok=True)
     document_path = upload_dir / "manual-operativo.txt"
     document_path.write_text("Contenido operativo de la instalación.", encoding="utf-8")
+    spool_dir = tmp_path / "emails"
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    tenant_key = hashlib.sha256(installation_id.encode("utf-8")).hexdigest()[:16]
+    spool_path = spool_dir / f"{tenant_key}__queued-for-manual-delivery-{uuid.uuid4().hex[:12]}.json"
+    spool_path.write_text(
+        json.dumps(
+            {
+                "provider": "local_spool",
+                "delivery_status": "queued_for_manual_delivery",
+                "installation_id": installation_id,
+                "to": f"cliente-{installation_id}@example.invalid",
+                "subject": "Recordatorio pendiente",
+                "body": "Entrega manual pendiente.",
+                "retention_days": 30,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     ids = {
         "customer": f"cust-{installation_id}",
@@ -226,6 +250,8 @@ def test_export_includes_all_operational_data_without_credentials(
     assert export["counts"]["rag_chunks"] == 1
     assert export["counts"]["idempotency_records"] == 1
     assert export["counts"]["outbox_messages"] == 1
+    assert export["counts"]["automation_email_spool"] == 1
+    assert export["data"]["automation_email_spool"][0]["installation_id"] == INSTALLATION_A
 
     assert "users" not in export["data"], "El export nunca incluye credenciales"
     assert "audit_logs" not in export["data"], "El AuditLog queda fuera del volcado"
@@ -280,7 +306,7 @@ def test_immediate_erase_removes_operational_data_and_keeps_audit(
     assert tables["quotes"] == 1
     assert tables["rag_documents"] == 1
     assert tables["rag_chunks"] == 1
-    assert result["executed"]["files_removed"] == 1
+    assert result["executed"]["files_removed"] == 2
 
     counts = _counts(lifecycle_env, INSTALLATION_A)
     assert counts["customers"] == 0
@@ -293,6 +319,9 @@ def test_immediate_erase_removes_operational_data_and_keeps_audit(
     assert counts["audit_logs"] >= 1, "El AuditLog nunca se borra"
 
     assert not document_path.exists(), "El archivo RAG debe eliminarse del disco"
+    assert not list((tmp_path / "emails").glob("*.json")), (
+        "El erase debe eliminar también el spool de email del tenant"
+    )
 
     with _session(lifecycle_env, INSTALLATION_A) as db:
         erase_audits = db.query(AuditLog).filter(AuditLog.event_type == "lifecycle.erase").all()
@@ -445,3 +474,7 @@ def test_lifecycle_is_isolated_between_installations(
     )
     assert counts_a["quotes"] == 1
     assert counts_a["rag_documents"] == 1
+    tenant_a_key = hashlib.sha256(INSTALLATION_A.encode("utf-8")).hexdigest()[:16]
+    tenant_b_key = hashlib.sha256(INSTALLATION_B.encode("utf-8")).hexdigest()[:16]
+    assert list((tmp_path / "emails").glob(f"{tenant_a_key}__*.json"))
+    assert not list((tmp_path / "emails").glob(f"{tenant_b_key}__*.json"))

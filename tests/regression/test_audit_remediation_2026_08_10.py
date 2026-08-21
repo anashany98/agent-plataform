@@ -153,7 +153,7 @@ def _sign_webhook(raw_body: bytes, secret: str = CHATWOOT_WEBHOOK_SECRET) -> dic
     ts = str(int(time.time()))
     sig = hmac.new(
         secret.encode("utf-8"),
-        f"{ts}.".encode("utf-8") + raw_body,
+        f"{ts}.".encode() + raw_body,
         hashlib.sha256,
     ).hexdigest()
     return {
@@ -190,7 +190,7 @@ def _build_engine_and_client(tmp_path):
             finally:
                 db.close()
 
-    from app.database import get_db, SessionLocal
+    from app.database import SessionLocal, get_db
     from app.main import app
     from app.security import Principal, get_current_principal
 

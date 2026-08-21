@@ -17,8 +17,10 @@ os.environ.update(
         'ALLOW_DEMO_DATA': 'false',
         'AUTO_SEED_DEMO_DATA': 'false',
         'CHATWOOT_WEBHOOK_SECRET': 'test-chatwoot-secret',
+        'EMAIL_BOUNCE_WEBHOOK_SECRET': 'test-email-bounce-secret',
         'CHATWOOT_API_TOKEN': '',
         'CHATWOOT_HANDOFF_TEAM_ID': '1',
+        'CHATWOOT_HANDOFF_ASSIGNEE_ID': '0',
         # Hermeticidad D-032: los tests nunca deben heredar credenciales
         # reales del .env del operador. Con estas claves vacías los
         # adaptadores caen a su estado no configurado y el chat usa el
@@ -31,6 +33,7 @@ os.environ.update(
         'GHL_LOCATION_ID': '',
         'GHL_PIPELINE_ID': '',
         'GHL_PIPELINE_STAGE_ID': '',
+        'GHL_WEBHOOK_SECRET': 'test-ghl-webhook-secret',
         'ALLOW_INTEGRATION_STUBS': 'true',
         'ALLOW_MOCK_LLM': 'true',
         'STANDARD_LLM_PROVIDER': 'mock',

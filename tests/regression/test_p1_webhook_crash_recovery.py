@@ -179,6 +179,7 @@ def test_crash_after_effect_recovers_from_checkpoint_without_repeating_reply(
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", capture_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_ENABLED", True)
     monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
 
     real_complete = bridge_main._complete_idempotency
@@ -251,6 +252,7 @@ def test_hard_crash_stuck_processing_recovers_via_expired_lease(
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", capture_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_ENABLED", True)
     monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
 
     suffix = uuid.uuid4().hex
@@ -326,6 +328,23 @@ WEBHOOK_SUCCESS_BRANCHES = [
         "processed",
     ),
     (
+        # Plantilla del widget ("Get notified by email"). Antes se trataba
+        # como mensaje del cliente y el LLM respondía a "notificaciones por
+        # correo electrónico" (respuestas absurdas observadas en vivo).
+        "template_message",
+        {
+            "event": "message_created",
+            "id": "branch-tpl-1",
+            "message_type": "template",
+            "content": "Get notified by email",
+            "account": {"id": 6161},
+            "conversation": {"id": 7272},
+            "sender": {"id": 1, "name": "Bot", "email": "bot@example.invalid"},
+        },
+        None,
+        "processed",
+    ),
+    (
         "greeting",
         {
             "event": "message_created",
@@ -374,9 +393,18 @@ def test_success_branch_replay_returns_cached_result_not_processing(
     El replay inmediato del mismo ``message_id`` debe devolver 200 con el
     resultado cacheado (``duplicate_ignored``), no 202 ``processing``.
     """
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_ENABLED", False)
     monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "")
 
-    idempotency_key = f"chatwoot:6161:{payload['id']}"
+    # Misma derivación de clave que el handler: ``message_created`` usa
+    # ``chatwoot:<account>:<id>``; el resto de eventos (p. ej.
+    # ``conversation_created``) incluye el evento para evitar colisiones
+    # de id entre secuencias distintas de Chatwoot.
+    event = payload.get("event")
+    if event == "message_created":
+        idempotency_key = f"chatwoot:6161:{payload['id']}"
+    else:
+        idempotency_key = f"chatwoot:6161:{event}:{payload['id']}"
 
     first = _signed_chatwoot_request(isolated_api.client, payload)
     assert first.status_code == 200, (
@@ -442,6 +470,7 @@ def test_success_branch_with_effects_replay_does_not_repeat_effects(
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", capture_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_ENABLED", True)
     monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
 
     suffix = uuid.uuid4().hex
@@ -498,6 +527,7 @@ def test_concurrent_delivery_with_live_lease_returns_202_and_takeover_after_expi
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", capture_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_ENABLED", True)
     monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
 
     suffix = uuid.uuid4().hex
@@ -592,6 +622,7 @@ def test_failure_before_any_external_effect_retries_normally(
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", flaky_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_ENABLED", True)
     monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
 
     suffix = uuid.uuid4().hex

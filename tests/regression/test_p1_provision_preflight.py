@@ -69,7 +69,10 @@ def test_port_in_use_reports_free_port() -> None:
     assert _probe(port) == "FREE", "Debe reportar libre un puerto sin listener"
 
 
+@_linux_only
 def test_provision_script_syntax_is_valid() -> None:
+    # bash -n desde Python nativo de Windows cuelga (MSYS2 no cierra sus pipes
+    # de consola); en Windows el preflight equivalente lo cubre el .ps1.
     proc = subprocess.run(
         ["bash", "-n", "scripts/provision-client.sh"],
         capture_output=True,

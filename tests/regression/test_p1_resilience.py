@@ -174,7 +174,7 @@ def test_non_retryable_response_counts_as_provider_liveness(monkeypatch: pytest.
 class _NetworkGuardClient:
     """Cliente httpx falso que falla si alguien intenta usarlo."""
 
-    async def __aenter__(self) -> "_NetworkGuardClient":
+    async def __aenter__(self) -> _NetworkGuardClient:
         return self
 
     async def __aexit__(self, *_args: Any) -> None:
@@ -573,6 +573,7 @@ def test_webhook_ghl_outage_queues_lead_and_outbox_recovers(
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", capture_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_ENABLED", True)
     monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
     _configure_ghl(monkeypatch)
 
@@ -673,6 +674,7 @@ def test_outbox_checkpoint_prevents_duplicate_opportunity(
         return {"status": "captured"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", silent_chatwoot)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_ENABLED", True)
     monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
     _configure_ghl(monkeypatch)
 

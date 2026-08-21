@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 
+from app.config import settings
 from app.database import get_db
 from app.main import app
 
@@ -37,7 +38,11 @@ def test_liveness_is_independent_from_database(client) -> None:
         app.dependency_overrides.pop(get_db, None)
 
     assert response.status_code == 200
-    assert response.json() == {"status": "alive", "service": "bridge-api"}
+    assert response.json() == {
+        "status": "alive",
+        "service": "bridge-api",
+        "release_version": settings.APP_VERSION,
+    }
     assert dependency_calls == 0
 
 
@@ -58,6 +63,35 @@ def test_readiness_fails_closed_when_database_is_unavailable(client) -> None:
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Base de datos no disponible"}
+
+
+def test_readiness_requires_each_configured_worker(client, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "OUTBOX_WORKER_ENABLED", True)
+    monkeypatch.setattr(settings, "SCHEDULED_TASK_WORKER_ENABLED", False)
+    outbox = client.get("/ready")
+    assert outbox.status_code == 503
+    assert outbox.json()["detail"] == "Worker de outbox no disponible"
+
+    monkeypatch.setattr(settings, "OUTBOX_WORKER_ENABLED", False)
+    monkeypatch.setattr(settings, "SCHEDULED_TASK_WORKER_ENABLED", True)
+    scheduler = client.get("/ready")
+    assert scheduler.status_code == 503
+    assert scheduler.json()["detail"] == "Worker de tareas programadas no disponible"
+
+
+def test_readiness_requires_redis_when_enabled(client, monkeypatch) -> None:
+    from app.services.redis_backend import RedisBackend
+
+    async def unavailable(_self) -> bool:
+        return False
+
+    monkeypatch.setattr(settings, "REDIS_ENABLED", True)
+    monkeypatch.setattr(settings, "OUTBOX_WORKER_ENABLED", False)
+    monkeypatch.setattr(settings, "SCHEDULED_TASK_WORKER_ENABLED", False)
+    monkeypatch.setattr(RedisBackend, "check", unavailable)
+    response = client.get("/ready")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Backend Redis no disponible"
 
 
 def test_compose_uses_readiness_for_bridge_healthcheck() -> None:

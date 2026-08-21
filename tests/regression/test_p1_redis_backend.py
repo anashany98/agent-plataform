@@ -414,6 +414,27 @@ def test_rate_limit_backend_redis_with_broken_redis_fails_open_to_memory(
     assert response.status_code == 200, response.text
 
 
+def test_rate_limit_backend_redis_outage_is_503_when_fail_closed(
+    isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.rate_limit import RateLimitMiddleware
+
+    monkeypatch.setattr(bridge_main.settings, "REDIS_ENABLED", True)
+    monkeypatch.setattr(bridge_main.settings, "RATE_LIMIT_BACKEND", "redis")
+    monkeypatch.setattr(bridge_main.settings, "REDIS_RATE_LIMIT_FAIL_OPEN", False)
+    monkeypatch.setattr(bridge_main.settings, "RATE_LIMIT_ENABLED", True)
+    broken = InMemoryRedis(broken=True)
+    monkeypatch.setattr(
+        RateLimitMiddleware,
+        "_redis_backend",
+        lambda self: RedisBackend(client=broken),
+    )
+
+    response = isolated_env.client.get("/outbox")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Backend de rate limit no disponible"
+
+
 def test_rate_limit_redis_blocks_when_limit_exceeded(
     isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:

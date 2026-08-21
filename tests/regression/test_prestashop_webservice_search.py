@@ -157,7 +157,7 @@ def test_search_products_falls_back_to_in_memory_filter() -> None:
     async def fake_get_currency_id() -> str:
         return "1"
 
-    async def fake_get_tax_rate(tax_id: str) -> "object":  # noqa: ANN001
+    async def fake_get_tax_rate(tax_id: str) -> object:  # noqa: ANN001
         from decimal import Decimal
         return Decimal("0.21")
 

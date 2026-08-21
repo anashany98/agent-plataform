@@ -27,8 +27,6 @@ import uuid
 from decimal import Decimal
 
 import pytest
-from sqlalchemy.orm import Session
-
 from app.database import SessionLocal
 from app.main import GHL_LEAD_OUTBOX_TOPIC, _dispatch_ghl_lead_capture
 from app.models.models import (
@@ -47,7 +45,7 @@ from app.services.catalog_provider import (
 )
 from app.services.crm_provider import LocalCRMProvider, active_crm_provider
 from app.services.outbox import OutboxService
-
+from sqlalchemy.orm import Session
 
 # ---------------------------------------------------------------------------
 # Helpers herméticos (mismo patrón que tests/integration/test_commerce.py).
@@ -592,6 +590,7 @@ def test_full_core_chain_chat_to_approval_without_externals(
         confirm_body = confirm.json()
         assert confirm_body.get("action") == "order_created", confirm_body
         assert "factura" in confirm_body.get("reply", "").lower()
+        assert "invoice_email" in confirm_body, "El cierre de venta debe reportar el estado del envío de la factura"
         order_id = confirm_body["order_id"]
         created["order"] = order_id
 

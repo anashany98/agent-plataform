@@ -218,6 +218,7 @@ def test_handoff_assigns_a_chatwoot_team_or_agent(client, monkeypatch):
         return {"status": "fault-injection-capture"}
 
     monkeypatch.setattr(bridge_main.chatwoot_adapter, "_post", capture_outbound)
+    monkeypatch.setattr(bridge_main.settings, "CHATWOOT_ENABLED", True)
     monkeypatch.setattr(bridge_main.settings, "CHATWOOT_API_TOKEN", "test-chatwoot-token")
     payload = {
         "event": "message_created",
