@@ -1,0 +1,344 @@
+name: Production gates
+
+on:
+  pull_request:
+  push:
+    branches: [main, production-remediation]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  RELEASE_VERSION: 1.0.0-rc.1
+
+jobs:
+  backend:
+    name: Backend quality, tests and coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12.13"
+          cache: pip
+          cache-dependency-path: |
+            bridge-api/requirements.lock
+            bridge-api/requirements-dev.lock
+
+      - name: Install locked test toolchain
+        run: |
+          python -m pip install --require-hashes -r bridge-api/requirements-dev.lock
+
+      - name: Quality ratchet and hermetic corpus
+        env:
+          PYTHONPATH: ${{ github.workspace }}/bridge-api
+        run: python scripts/quality_gates.py --with-tests
+
+      - name: Coverage gate
+        env:
+          PYTHONPATH: ${{ github.workspace }}/bridge-api
+        run: >-
+          python -m pytest -q tests bridge-api/tests
+          --cov=app --cov-report=term-missing
+          --cov-report=xml:coverage.xml --cov-fail-under=65
+
+      - name: Dependency audit
+        run: python scripts/audit_dependencies.py --skip-npm
+
+      - name: Upload coverage evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: backend-coverage
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 14
+
+  postgres:
+    name: PostgreSQL migrations, invariants and restore
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15@sha256:a20a57d7aa5217a6af0a391ccf69f4a8512406d6c14be08132f801468cc3cc62
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: bridge_user
+          POSTGRES_PASSWORD: ci-disposable-bridge-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bridge_user -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.12.13"
+          cache: pip
+          cache-dependency-path: bridge-api/requirements-dev.lock
+
+      - name: Install backend
+        run: python -m pip install --require-hashes -r bridge-api/requirements-dev.lock
+
+      - name: Create run-bound disposable database
+        env:
+          ADMIN_DATABASE_URL: postgresql://bridge_user:ci-disposable-bridge-password@127.0.0.1:5432/postgres
+        run: |
+          python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+          engine = create_engine(os.environ["ADMIN_DATABASE_URL"], isolation_level="AUTOCOMMIT")
+          with engine.connect() as connection:
+              connection.execute(text("DROP DATABASE IF EXISTS p0_verify_deadbeefcafe WITH (FORCE)"))
+              connection.execute(text("CREATE DATABASE p0_verify_deadbeefcafe"))
+          engine.dispose()
+          PY
+
+      - name: PostgreSQL transactional invariants
+        env:
+          PYTHONPATH: ${{ github.workspace }}/bridge-api
+          DATABASE_URL: postgresql://bridge_user:ci-disposable-bridge-password@127.0.0.1:5432/p0_verify_deadbeefcafe
+          INSTALLATION_ID: p0-verify-deadbeefcafe
+          P0_VERIFY_RUN_ID: deadbeefcafe
+          P0_VERIFY_EPHEMERAL_ACK: DISPOSABLE-P0-POSTGRES-ONLY
+        run: python bridge-api/scripts/verify_p0_postgres.py
+
+      - name: Alembic clean, downgrade and re-upgrade
+        env:
+          PYTHONPATH: ${{ github.workspace }}/bridge-api
+          DATABASE_URL: postgresql://bridge_user:ci-disposable-bridge-password@127.0.0.1:5432/p0_verify_deadbeefcafe
+          INSTALLATION_ID: p0-verify-deadbeefcafe
+          P0_VERIFY_RUN_ID: deadbeefcafe
+          P0_VERIFY_EPHEMERAL_ACK: DISPOSABLE-P0-POSTGRES-ONLY
+        run: python bridge-api/scripts/verify_p0_migrations_postgres.py
+
+      - name: Backup and restore into empty PostgreSQL
+        env:
+          PYTHONPATH: ${{ github.workspace }}/bridge-api
+          RUN_POSTGRES_BACKUP: "1"
+          BACKUP_TEST_PG_ADMIN_URL: postgresql://bridge_user:ci-disposable-bridge-password@127.0.0.1:5432/postgres
+          BACKUP_TEST_PG_URL: postgresql://bridge_user:ci-disposable-bridge-password@127.0.0.1:5432/backup_source
+        run: python -m pytest -q tests/regression/test_p1_backup_restore.py::test_backup_restore_roundtrip_postgres
+
+  portal:
+    name: Portal format, typecheck, tests and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: portal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24.18.0"
+          cache: npm
+          cache-dependency-path: portal/package-lock.json
+
+      - name: Install exact dependencies
+        run: npm ci --include=optional
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Component and accessibility tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Upload portal build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: portal-dist
+          path: portal/dist
+          if-no-files-found: error
+          retention-days: 14
+
+  repository-security:
+    name: Secrets, vulnerabilities and IaC
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Canary-verified full Git history secret scan
+        shell: bash
+        run: |
+          set +e
+          canary_id="$(printf '%s%s' 'AKIA' 'RINHPISNJGE35PVM')"
+          canary_secret="$(printf '%s%s' 'p9Jw7rK3mN5vQ2xZ8cF4' 'hL6sT1yB0dG7uE9aK2mN')"
+          printf 'aws_access_key_id = "%s"\naws_secret_access_key = "%s"\n' \
+            "${canary_id}" "${canary_secret}" \
+            | docker run --rm -i \
+                trufflesecurity/trufflehog:3.96.0@sha256:aa821cf4ace8861c7d096d83818cdf7bb9719028a52d37a52eaad44086a52577 \
+                --no-update --no-verification --results=unverified,unknown,verified \
+                --json --fail --fail-on-scan-errors stdin \
+            | python .github/scripts/secret_scan_gate.py --canary-detector AWS
+          canary_status=("${PIPESTATUS[@]}")
+          set -e
+          test "${canary_status[1]}" -eq 183
+          test "${canary_status[2]}" -eq 0
+
+          set +e
+          docker run --rm -v "${PWD}:/repo:ro" \
+            trufflesecurity/trufflehog:3.96.0@sha256:aa821cf4ace8861c7d096d83818cdf7bb9719028a52d37a52eaad44086a52577 \
+            --no-update --no-verification --results=unverified,unknown,verified \
+            --json --fail --fail-on-scan-errors git file:///repo \
+            | python .github/scripts/secret_scan_gate.py \
+                --allowlist .github/secret-scan-allowlist.json
+          history_status=("${PIPESTATUS[@]}")
+          set -e
+          test "${history_status[0]}" -eq 0 -o "${history_status[0]}" -eq 183
+          test "${history_status[1]}" -eq 0
+
+      - name: Trivy dependency and IaC gate
+        run: >-
+          docker run --rm
+          -v "${PWD}:/workspace:ro"
+          -w /workspace
+          -v agent-platform-trivy-cache:/root/.cache/trivy
+          aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+          fs --scanners vuln,misconfig
+          --severity HIGH,CRITICAL
+          --ignore-unfixed=false
+          --skip-dirs .git
+          --skip-dirs vendor
+          --skip-dirs .venv
+          --skip-dirs portal/node_modules
+          --skip-dirs portal/dist
+          --skip-dirs "**/__pycache__"
+          --exit-code 1 .
+
+  containers:
+    name: Container builds, scans and SBOM
+    needs: [backend, postgres, portal, repository-security]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Build Bridge image
+        run: >-
+          docker build
+          --build-arg RELEASE_VERSION=${RELEASE_VERSION}
+          --build-arg SOURCE_COMMIT=${GITHUB_SHA}
+          --tag agent-platform-bridge-api:${RELEASE_VERSION}
+          bridge-api
+
+      - name: Build Portal image
+        run: >-
+          docker build
+          --build-arg RELEASE_VERSION=${RELEASE_VERSION}
+          --build-arg SOURCE_COMMIT=${GITHUB_SHA}
+          --tag agent-platform-portal:${RELEASE_VERSION}
+          portal
+
+      - name: Scan Bridge image
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v agent-platform-trivy-cache:/root/.cache/trivy
+          aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+          image --scanners vuln,secret,misconfig
+          --severity HIGH,CRITICAL
+          --ignore-unfixed=false
+          --exit-code 1
+          agent-platform-bridge-api:${RELEASE_VERSION}
+
+      - name: Scan Portal image
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v agent-platform-trivy-cache:/root/.cache/trivy
+          aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+          image --scanners vuln,secret,misconfig
+          --severity HIGH,CRITICAL
+          --ignore-unfixed=false
+          --exit-code 1
+          agent-platform-portal:${RELEASE_VERSION}
+
+      - name: Generate CycloneDX SBOMs and image manifest
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${PWD}:/evidence" \
+            -v agent-platform-trivy-cache:/root/.cache/trivy \
+            aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --format cyclonedx --output /evidence/sbom-bridge.cdx.json \
+            agent-platform-bridge-api:${RELEASE_VERSION}
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${PWD}:/evidence" \
+            -v agent-platform-trivy-cache:/root/.cache/trivy \
+            aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+            image --format cyclonedx --output /evidence/sbom-portal.cdx.json \
+            agent-platform-portal:${RELEASE_VERSION}
+          docker image inspect agent-platform-bridge-api:${RELEASE_VERSION} agent-platform-portal:${RELEASE_VERSION} > image-manifest.json
+          sha256sum sbom-bridge.cdx.json sbom-portal.cdx.json image-manifest.json > SHA256SUMS
+
+      - name: Upload supply-chain evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: container-evidence
+          path: |
+            sbom-bridge.cdx.json
+            sbom-portal.cdx.json
+            image-manifest.json
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+  compose:
+    name: Compose profile contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Core profile resolves without vendor checkout
+        run: docker compose --env-file .env.example --profile core config --quiet
+
+      - name: Full profile resolves from pinned declarations
+        run: docker compose --env-file .env.example --profile full config --quiet
+
+      - name: Production profile resolves with TLS overlay
+        run: |
+          touch /tmp/agent-platform-ci-cert.pem /tmp/agent-platform-ci-key.pem
+          TLS_CERT_FILE=/tmp/agent-platform-ci-cert.pem \
+          TLS_PRIVATE_KEY_FILE=/tmp/agent-platform-ci-key.pem \
+            docker compose --env-file .env.example \
+              -f docker-compose.yml \
+              -f infrastructure/compose/docker-compose.prod.example.yml \
+              --profile production config --quiet

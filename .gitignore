@@ -33,6 +33,7 @@ infrastructure/backups/*
 uploads/
 logs/
 test-results/
+.prestashop_last_sync
 *.db
 *.sqlite
 *.sqlite3
@@ -51,3 +52,7 @@ clients/*/imports/private/
 
 # Freebuff desktop app local state
 .freebuff/
+
+# Dependencias vendor reproducibles mediante infrastructure/vendor-lock.json
+# y scripts/verify-vendor-pins.py. No se versionan clones Git anidados.
+vendor/

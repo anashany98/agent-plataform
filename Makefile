@@ -2,24 +2,52 @@ SHELL := /bin/bash
 CLIENT_ID ?= desarrollo-local
 ENV_FILE ?= .env.$(CLIENT_ID)
 PROJECT ?= agent-$(CLIENT_ID)
-COMPOSE = docker compose --env-file $(ENV_FILE) -p $(PROJECT) --profile full
+PROFILE ?= production
+DOMAIN ?= $(CLIENT_ID).local
+PROXY_PORT ?= 9000
+TLS_CERTIFICATE ?=
+TLS_PRIVATE_KEY ?=
+PREFLIGHT_MODE ?= release
+PREFLIGHT_FLAGS ?=
+PYTHON ?= python3
+COMPOSE_FILES = -f docker-compose.yml
+ifeq ($(PROFILE),production)
+COMPOSE_FILES += -f infrastructure/compose/docker-compose.prod.example.yml
+endif
+COMPOSE = docker compose --env-file $(ENV_FILE) -p $(PROJECT) $(COMPOSE_FILES) --profile $(PROFILE)
+UP_BUILD_POLICY =
+ifeq ($(PROFILE),production)
+UP_BUILD_POLICY = --no-build --pull never
+endif
 
-.PHONY: check configure build up down restart logs health test test-unit test-coverage typecheck lint backup restore clean-project status provision update rollback
+.PHONY: check preflight configure build release-manifest up down restart logs health smoke migrate-check test test-unit test-coverage typecheck lint backup restore clean-project status provision update rollback
 
-check:
+preflight:
 	@test -f "$(ENV_FILE)" || (echo "Falta $(ENV_FILE). Ejecuta make provision CLIENT_ID=$(CLIENT_ID)" >&2; exit 1)
+	$(PYTHON) scripts/verify-compose-profiles.py
+	$(PYTHON) scripts/verify-production-preflight.py
+	$(PYTHON) scripts/verify-proxy-config.py
+	$(PYTHON) scripts/verify-production-network.py
+	$(PYTHON) scripts/verify-backup-format.py
+	$(PYTHON) scripts/production-preflight.py --env-file "$(ENV_FILE)" --profile "$(PROFILE)" --mode "$(PREFLIGHT_MODE)" $(PREFLIGHT_FLAGS)
+
+check: preflight
 	$(COMPOSE) config >/dev/null
 
 provision:
-	./scripts/provision-client.sh "$(CLIENT_ID)" "$(CLIENT_ID).local" "$${PROXY_PORT:-9000}"
+	./scripts/provision-client.sh "$(CLIENT_ID)" "$(DOMAIN)" "$(PROXY_PORT)" "$(PROFILE)" "$(TLS_CERTIFICATE)" "$(TLS_PRIVATE_KEY)"
 
 configure: provision
 
-build: check
+build:
+	$(MAKE) preflight PREFLIGHT_MODE=bootstrap
 	$(COMPOSE) build --pull
 
+release-manifest:
+	$(PYTHON) scripts/create-release-manifest.py --env-file "$(ENV_FILE)"
+
 up: check
-	$(COMPOSE) up -d
+	$(COMPOSE) up -d $(UP_BUILD_POLICY) --wait --wait-timeout 600
 
 status: check
 	$(COMPOSE) ps
@@ -34,7 +62,12 @@ logs: check
 	$(COMPOSE) logs -f --tail=200
 
 health: check
-	@./scripts/check-health.sh "$(CLIENT_ID)"
+	@./scripts/check-health.sh "$(CLIENT_ID)" "$(PROFILE)"
+
+smoke: health
+
+migrate-check: check
+	$(COMPOSE) run --rm --no-deps --entrypoint alembic bridge-api -c /app/alembic.ini check
 
 test: test-unit typecheck
 
@@ -53,18 +86,18 @@ lint:
 
 backup: check
 	@test -n "$$BACKUP_ENCRYPTION_PASSPHRASE" || (echo "Define BACKUP_ENCRYPTION_PASSPHRASE" >&2; exit 1)
-	./scripts/backup-restore-integral.sh backup "$(CLIENT_ID)"
+	DEPLOY_PROFILE="$(PROFILE)" ./scripts/backup-restore-integral.sh backup "$(CLIENT_ID)"
 
-restore: check
+restore:
 	@test -n "$(ARCHIVE)" || (echo "Uso: make restore CLIENT_ID=x ARCHIVE=archivo.enc" >&2; exit 1)
 	@test -n "$$BACKUP_ENCRYPTION_PASSPHRASE" || (echo "Define BACKUP_ENCRYPTION_PASSPHRASE" >&2; exit 1)
-	./scripts/backup-restore-integral.sh restore "$(CLIENT_ID)" "$(ARCHIVE)"
+	DEPLOY_PROFILE="$(PROFILE)" ./scripts/backup-restore-integral.sh restore "$(CLIENT_ID)" "$(ARCHIVE)"
 
-update: check
+update:
 	@test -n "$(TARGET_REF)" || (echo "Uso: make update CLIENT_ID=x TARGET_REF=v0.9.1" >&2; exit 1)
 	./scripts/update-client.sh "$(CLIENT_ID)" "$(TARGET_REF)"
 
-rollback: check
+rollback:
 	./scripts/rollback-client.sh "$(CLIENT_ID)"
 
 clean-project: check

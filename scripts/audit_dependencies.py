@@ -2,7 +2,7 @@
 
 Comprobaciones:
 
-- ``pip-audit -r bridge-api/requirements.txt`` debe pasar sin vulnerabilidades
+- ``pip-audit -r bridge-api/requirements.lock`` debe pasar sin vulnerabilidades
   pendientes (bloquea el gate de dependencias para producción).
 - ``npm audit --omit=dev`` sobre ``portal/package.json`` debe pasar sin
   vulnerabilidades en dependencias de producción.
@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-REQUIREMENTS = ROOT / "bridge-api" / "requirements.txt"
+REQUIREMENTS = ROOT / "bridge-api" / "requirements.lock"
 PORTAL = ROOT / "portal"
 
 
@@ -58,6 +58,11 @@ def _run(cmd: list[str], *, cwd: Path | None = None, timeout: int = 600) -> subp
 
 
 def audit_python(strict: bool = True) -> tuple[int, str]:
+    if sys.version_info[:2] != (3, 12):
+        return 1, (
+            "el lock de producción requiere Python 3.12; "
+            f"runtime actual {sys.version_info.major}.{sys.version_info.minor}"
+        )
     cmd = [sys.executable, "-m", "pip_audit", "-r", str(REQUIREMENTS), "--strict"]
     if not strict:
         cmd.append("--no-deps")
@@ -100,6 +105,11 @@ def audit_npm(*, production_only: bool) -> tuple[int, str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Auditoría de dependencias D-017")
+    parser.add_argument(
+        "--skip-npm",
+        action="store_true",
+        help="Omitir npm; usar sólo cuando exista un gate npm separado",
+    )
     parser.add_argument("--skip-npm-dev", action="store_true", help="Omitir la pasada npm dev (no recomendada)")
     parser.add_argument(
         "--no-strict",
@@ -116,16 +126,17 @@ def main(argv: list[str] | None = None) -> int:
     if rc != 0:
         failures.append(f"pip-audit: {msg}")
 
-    rc, msg = audit_npm(production_only=True)
-    print(f"[npm-audit prod] {msg}")
-    if rc != 0:
-        failures.append(f"npm-audit prod: {msg}")
+    if not args.skip_npm:
+        rc, msg = audit_npm(production_only=True)
+        print(f"[npm-audit prod] {msg}")
+        if rc != 0:
+            failures.append(f"npm-audit prod: {msg}")
 
-    if not args.skip_npm_dev:
-        rc, msg = audit_npm(production_only=False)
-        print(f"[npm-audit all] {msg}")
-        if rc != 0 and "no bloquea" not in msg:
-            warnings.append(msg)
+        if not args.skip_npm_dev:
+            rc, msg = audit_npm(production_only=False)
+            print(f"[npm-audit all] {msg}")
+            if rc != 0 and "no bloquea" not in msg:
+                warnings.append(msg)
 
     if warnings:
         print("\nAdvertencias (no bloquean):", file=sys.stderr)

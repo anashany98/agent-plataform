@@ -1,0 +1,17 @@
+{
+  "format_version": 1,
+  "sources": [
+    {
+      "name": "flowwink",
+      "path": "vendor/flowwink",
+      "repository": "https://github.com/magnusfroste/flowwink.git",
+      "commit": "0cd4e9b8af0d432c9a942a692d8f1fa4a04ec67b"
+    },
+    {
+      "name": "chatwoot",
+      "path": "vendor/chatwoot",
+      "repository": "https://github.com/chatwoot/chatwoot.git",
+      "commit": "b05f22da8df103a349c3e820afcb76acb129692a"
+    }
+  ]
+}
