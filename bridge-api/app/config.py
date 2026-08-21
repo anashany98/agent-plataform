@@ -319,6 +319,10 @@ class Settings(BaseSettings):
         for name, value in required.items():
             if len(value) < 24 or any(marker in value.lower() for marker in invalid_markers):
                 errors.append(name)
+        if self.INSTALLATION_ID.strip() == "development-local":
+            # B-03: sin la env var explícita, producción etiquetaría filas
+            # con el tenant de desarrollo de forma silenciosa. Fail-closed.
+            errors.append("INSTALLATION_ID")
         if self.ALLOW_MOCK_LLM or self.ALLOW_INTEGRATION_STUBS:
             errors.append("ALLOW_MOCK_LLM/ALLOW_INTEGRATION_STUBS")
         if self.PILOT_MODE:

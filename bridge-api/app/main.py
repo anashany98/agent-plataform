@@ -167,9 +167,19 @@ from app.services.tool_policy import (
 
 settings.validate_runtime_security()
 
-if settings.AUTO_CREATE_SCHEMA:
-    Base.metadata.create_all(bind=engine)
-seed_database()
+
+def initialize_database() -> None:
+    """Crea el esquema (si ``AUTO_CREATE_SCHEMA``) y siembra datos iniciales.
+
+    Se invoca en el arranque del servidor (lifespan), nunca en tiempo de
+    importación: importar ``app.main`` sin una BD viva no debe reventar
+    (B-04). Los tests la llaman de forma explícita desde su conftest.
+    """
+
+    if settings.AUTO_CREATE_SCHEMA:
+        Base.metadata.create_all(bind=engine)
+    seed_database()
+
 
 async def lifespan(app: FastAPI):
     """Arranca/para los workers durables de outbox y tareas aprobadas.
@@ -179,6 +189,7 @@ async def lifespan(app: FastAPI):
     cuando el diccionario ya existe. El worker es opcional
     (``OUTBOX_WORKER_ENABLED=true``); en tests queda deshabilitado.
     """
+    initialize_database()
     outbox_worker = None
     scheduled_task_worker = None
     activity_reminder_worker = None
@@ -2520,7 +2531,10 @@ async def _try_semantic_catalog_search(
             sources=sources,
             min_score=0.30,
         )
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - degradación controlada, con log
+        logging.getLogger("bridge.api").warning(
+            "Búsqueda semántica del chat falló (se continúa sin resultados): %s", exc
+        )
         return []
 
 
@@ -2606,8 +2620,10 @@ def _default_catalog_source() -> str | None:
     try:
         if prestashop_adapter.configured():
             return "prestashop"
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - fail-closed a None, con log
+        logging.getLogger("bridge.api").warning(
+            "No se pudo sondear PrestaShop como fuente de catálogo: %s", exc
+        )
     return None
 
 
@@ -2795,7 +2811,8 @@ def get_health(request: Request, db: Session = Depends(get_db)):
     try:
         db.execute(text("SELECT 1"))
         db_status = "healthy"
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - el estado se expone en /health
+        logging.getLogger("bridge.api").warning("Health check de BD falló: %s", exc)
         db_status = "unhealthy"
     outbox_worker = getattr(request.app.state, "outbox_worker", None)
     scheduler_worker = getattr(request.app.state, "scheduled_task_worker", None)
@@ -4059,7 +4076,10 @@ async def receive_chatwoot_webhook(
                     )
                     reply = ai_reply["answer"]
                     provider_used = ai_reply["provider"]
-                except Exception:
+                except Exception as exc:  # noqa: BLE001 - fallback determinista, con log
+                    logging.getLogger("bridge.api").warning(
+                        "LLM de búsqueda de catálogo falló (fallback determinista): %s", exc
+                    )
                     reply = (
                         "Te ayudo a buscar en el catálogo: dime una categoría "
                         "o un tipo de producto concreto."
@@ -4203,7 +4223,10 @@ async def receive_chatwoot_webhook(
                     )
                     reply = ai_reply["answer"]
                     greeting_provider = ai_reply["provider"]
-                except Exception:
+                except Exception as exc:  # noqa: BLE001 - fallback determinista, con log
+                    logging.getLogger("bridge.api").warning(
+                        "LLM de saludo falló (fallback determinista): %s", exc
+                    )
                     reply = (
                         "¡Hola! Soy el asistente de la tienda. "
                         "¿En qué puedo ayudarte?"
@@ -4246,7 +4269,10 @@ async def receive_chatwoot_webhook(
                         )
                         reply = ai_reply["answer"]
                         provider_used = ai_reply["provider"]
-                    except Exception:
+                    except Exception as exc:  # noqa: BLE001 - fallback extractivo, con log
+                        logging.getLogger("bridge.api").warning(
+                            "LLM de comparación falló (fallback extractivo): %s", exc
+                        )
                         reply, _ = comparison_result
                         provider_used = "extractive"
                     compared = comparison_result[1]
@@ -4336,7 +4362,10 @@ async def receive_chatwoot_webhook(
                         )
                         reply = ai_reply["answer"]
                         provider_used = ai_reply["provider"]
-                    except Exception:
+                    except Exception as exc:  # noqa: BLE001 - fallback determinista, con log
+                        logging.getLogger("bridge.api").warning(
+                            "LLM de listado de catálogo falló (fallback determinista): %s", exc
+                        )
                         # Fallback determinista: lista acotada para no
                         # generar respuestas descomunales con catálogos
                         # grandes (ver _format_extractive_lines).
@@ -4466,7 +4495,10 @@ async def receive_chatwoot_webhook(
                             )
                             reply = ai_reply["answer"]
                             provider_used = ai_reply["provider"]
-                        except Exception:
+                        except Exception as exc:  # noqa: BLE001 - fallback determinista, con log
+                            logging.getLogger("bridge.api").warning(
+                                "LLM de categoría falló (fallback determinista): %s", exc
+                            )
                             reply = (
                                 f"De momento no tenemos {_humanize_category(domain_hint)} "
                                 f"en el catálogo. Tenemos {len(verified_products)} "
@@ -4654,8 +4686,10 @@ async def receive_chatwoot_webhook(
                         claim_owner,
                         RuntimeError("webhook_terminate_failed"),
                     )
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 - best-effort, con log
+                    logging.getLogger("bridge.api").warning(
+                        "No se pudo marcar el lease de idempotencia como fallido: %s", exc
+                    )
 
 
 @app.post("/webhooks/activepieces", tags=["Webhooks"])

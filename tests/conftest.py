@@ -78,7 +78,21 @@ def _reset_circuit_breakers():
 
 
 @pytest.fixture(scope='session', autouse=True)
-def synthetic_business_fixtures() -> None:
+def _database_initialized():
+    """B-04: la BD se inicializa de forma explícita, no en el import.
+
+    ``app.main`` ya no crea esquema ni siembra en tiempo de importación;
+    los tests que acceden a ``SessionLocal`` directamente necesitan el
+    esquema creado antes de la primera consulta.
+    """
+    from app.main import initialize_database
+
+    initialize_database()
+    yield
+
+
+@pytest.fixture(scope='session', autouse=True)
+def synthetic_business_fixtures(_database_initialized) -> None:
     """Provide explicit non-demo fixtures for the historical integration suite."""
     from decimal import Decimal
 

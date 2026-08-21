@@ -99,6 +99,9 @@ def test_enabled_chatwoot_is_fail_closed_in_production(override) -> None:
         dict(ENABLE_AUTOMATIC_ORDER_CONFIRMATION=True),
         dict(ENABLE_AUTOMATIC_INVOICE_ISSUANCE=True),
         dict(ENABLE_AUTOMATIC_PUBLISHING=True),
+        # B-03: el tenant por defecto de desarrollo no puede etiquetar filas
+        # en producción; exige INSTALLATION_ID explícito.
+        dict(INSTALLATION_ID="development-local"),
     ],
 )
 def test_insecure_production_config_is_rejected(override) -> None:
