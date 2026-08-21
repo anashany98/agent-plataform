@@ -104,7 +104,10 @@ def main() -> int:
         "content": f"Hola, me interesa {name}, quiero 2 unidades",
         "private": False,
         "account": {"id": 424242},
-        "conversation": {"id": 525252},
+        # Conversación única por ejecución: la app vincula ConversationState a un
+        # cliente, así que reutilizar la misma conversación con un email nuevo en
+        # una segunda ejecución hace fallar el confirm (remitente ≠ cliente).
+        "conversation": {"id": int(uuid.uuid4().hex[:8], 16)},
         "sender": {"id": 99, "name": "Cliente E2E", "email": f"e2e-{uuid.uuid4().hex[:8]}@example.invalid"},
     }
     raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()

@@ -1,12 +1,20 @@
-"""Generate a comprehensive project status report in PDF.
+"""Generador histórico deshabilitado; no representa el readiness actual.
 
-Produces: release/project-status-report/PROJECT_STATUS_REPORT.pdf
-Author: ZCode (autonomous remediation workflow)
+La fuente autoritativa es ``docs/PRODUCTION_READINESS.md``. ``main`` falla de
+forma segura para impedir que esta instantánea antigua publique un PDF falso.
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
+
+if __name__ == "__main__":
+    print(
+        "SUPERSEDED: usa docs/PRODUCTION_READINESS.md; el generador histórico "
+        "está deshabilitado para impedir un informe de release falso.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT, TA_CENTER
@@ -26,7 +34,7 @@ from reportlab.platypus import (
 )
 
 
-PROJECT_ROOT = Path(r"C:\Users\PC\Desktop\PROYECTOS\agent-platform-fixed")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "release" / "project-status-report"
 OUTPUT_PDF = OUTPUT_DIR / "PROJECT_STATUS_REPORT.pdf"
 
@@ -1025,29 +1033,11 @@ def section_12_annex(styles) -> list:
 
 
 def main() -> int:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    styles = build_styles()
-    doc = StatusDoc(str(OUTPUT_PDF))
-    story: list = []
-    story.extend(build_cover(styles))
-    story.extend(build_toc(styles))
-    story.extend(section_1_executive_summary(styles))
-    story.extend(section_2_phases(styles))
-    story.extend(section_3_failures(styles))
-    story.extend(section_4_verified(styles))
-    story.extend(section_5_pending_work(styles))
-    story.extend(section_6_how_to_fix(styles))
-    story.extend(section_7_blockers(styles))
-    story.extend(section_8_production_criteria(styles))
-    story.extend(section_9_risks(styles))
-    story.extend(section_10_roadmap(styles))
-    story.extend(section_11_recommendations(styles))
-    story.extend(section_12_annex(styles))
-    doc.build(story)
-    print(f"PDF generated at: {OUTPUT_PDF}")
-    print(f"Size: {OUTPUT_PDF.stat().st_size} bytes")
-    return 0
+    print(
+        "SUPERSEDED: este generador contiene una instantánea histórica y no puede "
+        "publicar el estado actual. Usa docs/PRODUCTION_READINESS.md y los artefactos "
+        "de release generados desde un checkout limpio.",
+        file=sys.stderr,
+    )
+    return 2
 
-
-if __name__ == "__main__":
-    sys.exit(main())
