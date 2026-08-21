@@ -116,12 +116,6 @@ from app.services.crm_webhooks import (
     enqueue_crm_webhooks,
     validate_webhook_url,
 )
-from app.services.appearance_service import (
-    appearance_response,
-    get_or_create_appearance,
-    is_valid_accent_color,
-    set_accent_color,
-)
 from app.services.deterministic_tools import BusinessRuleError, DeterministicToolsService, InsufficientStockError
 from app.services.email_service import (
     TEMPLATE_VARIABLES,
@@ -259,6 +253,12 @@ app.add_middleware(
     ],
     expose_headers=["X-Correlation-ID", "X-Request-ID"],
 )
+
+# B-01: routers de dominio extraídos de este módulo. Se registran aquí y
+# los handlers conservan rutas, tags y comportamiento exactos.
+from app.routers.appearance import router as appearance_router  # noqa: E402
+
+app.include_router(appearance_router)
 
 
 @app.middleware("http")
@@ -455,12 +455,6 @@ class EmailSettingsUpdate(BaseModel):
 
     signature: str | None = Field(default=None, max_length=5_000)
     tracking_enabled: bool | None = None
-
-
-class AppearanceUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    accent_color: str = Field(min_length=7, max_length=7)
 
 
 class EmailSendTestRequest(BaseModel):
@@ -1535,30 +1529,9 @@ def verify_hmac_signature(
     return hmac.compare_digest(expected, supplied)
 
 
-def _audit(
-    db: Session,
-    *,
-    event_type: str,
-    status_value: str,
-    details: dict[str, Any],
-    principal: Principal | None = None,
-    correlation_id: str | None = None,
-    commit: bool = True,
-) -> None:
-    db.add(
-        AuditLog(
-            correlation_id=correlation_id or str(uuid.uuid4()),
-            agent_id="system",
-            user_id=principal.user_id if principal else None,
-            event_type=event_type,
-            provider="internal",
-            model_name="deterministic",
-            status=status_value,
-            details=details,
-        )
-    )
-    if commit:
-        db.commit()
+# B-01: el helper de auditoría vive en app.routers.common para que los
+# routers de dominio auditen sin importar main (se evita el ciclo).
+from app.routers.common import audit as _audit  # noqa: E402
 
 
 def _idempotency_fingerprint(payload: dict[str, Any] | None) -> str | None:
@@ -12228,49 +12201,6 @@ def update_email_settings(
         event_type="email.settings_updated",
         status_value="success",
         details={"changed": changed},
-        principal=principal,
-    )
-    return response
-
-
-@app.get("/appearance/settings", tags=["Apariencia"])
-def get_appearance_settings(
-    _: Principal = Depends(require_roles(*READ_ROLES)),
-    db: Session = Depends(get_db),
-):
-    """Color de acento de la marca de la instalación (get-or-create)."""
-
-    return appearance_response(get_or_create_appearance(db))
-
-
-@app.put("/appearance/settings", tags=["Apariencia"])
-def update_appearance_settings(
-    req: AppearanceUpdate,
-    principal: Principal = Depends(require_roles(*ADMIN_ROLES)),
-    db: Session = Depends(get_db),
-):
-    """Actualiza el color de acento (solo admin, auditado).
-
-    Formato estricto ``#RRGGBB`` (regex) para no inyectar CSS arbitrario;
-    el portal lo aplica a las variables CSS de acento.
-    """
-
-    if not is_valid_accent_color(req.accent_color):
-        raise HTTPException(
-            status_code=422,
-            detail="El color de acento debe tener formato #RRGGBB (por ejemplo #246bfd).",
-        )
-    row = get_or_create_appearance(db)
-    changed: list[str] = []
-    if row.accent_color != req.accent_color:
-        row = set_accent_color(db, row, req.accent_color, principal.username)
-        changed.append("accent_color")
-    response = appearance_response(row)
-    _audit(
-        db,
-        event_type="appearance.settings_updated",
-        status_value="success",
-        details={"changed": changed, "accent_color": req.accent_color},
         principal=principal,
     )
     return response
