@@ -8,7 +8,7 @@ export const translations = {
   pilotModeBanner:
     "Modo piloto activo: las acciones sensibles requieren aprobación humana.",
   nav: {
-    resumen: "Resumen",
+    resumen: "Hoy",
     aprobaciones: "Aprobaciones",
     catalogo: "Productos",
     documentos: "Documentos",

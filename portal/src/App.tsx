@@ -1,1001 +1,78 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
   Bot,
   Boxes,
   CheckCircle2,
+  Clock,
   FileText,
   Gauge,
   LogOut,
-  Moon,
+  MessageSquare,
   Package,
   RefreshCw,
   ShieldCheck,
-  Sun,
+  Mail,
   Users,
+  Webhook,
   Workflow,
 } from "lucide-react";
+import { apiRequest, AUTH_EXPIRED_EVENT } from "./api";
+import { api } from "./apiHelpers";
+import {
+  approvalActionLabel,
+  approvalFieldLabel,
+  approvalFieldValue,
+  clearStoredSession,
+  formatDate,
+  formatNumber,
+  integrationLabel,
+  integrationStatus,
+  roleLabel,
+  sectionFromHash,
+  syncStatusClass,
+  syncStatusLabel,
+} from "./appFormat";
+import {
+  ADMIN_ROLES,
+  ADVANCED_SECTIONS,
+  DEFAULT_ACCENT,
+  NAV_GROUP_LABELS,
+  NAV_GROUP_ORDER,
+  OPERATOR_ROLES,
+  SECTION_TITLES,
+  type Approval,
+  type ApprovalIntent,
+  type CostSummary,
+  type Dashboard,
+  type NavGroupId,
+  type SectionId,
+  type SyncHistoryRow,
+} from "./appTypes";
 import { translations } from "./i18n/es";
-
-type Approval = {
-  id: string;
-  action_type: string;
-  target_key: string;
-  status: string;
-  payload: Record<string, unknown>;
-  created_at: string;
-};
-
-type DashboardPermissions = {
-  approve: boolean;
-  manage_leads: boolean;
-  manage_users: boolean;
-  view_costs: boolean;
-  import_catalog: boolean;
-};
-
-type Dashboard = {
-  installation_id: string;
-  installed_version: string;
-  pilot_mode: boolean;
-  role: string;
-  permissions: DashboardPermissions;
-  integrations: Record<string, string>;
-  counts: Record<string, number>;
-};
-
-type LeadOpportunity = {
-  id: string;
-  name: string;
-  stage: string;
-  status: string;
-  monetary_value: number;
-  currency: string;
-  external_reference: string | null;
-  notes_count: number;
-  created_at: string | null;
-};
-
-type LeadRow = {
-  id: string;
-  email: string;
-  first_name: string;
-  phone: string | null;
-  company_name: string | null;
-  source: string;
-  status: string;
-  created_at: string | null;
-  opportunities: LeadOpportunity[];
-};
-
-type CostSummary = {
-  total_executions: number;
-  total_tokens_consumed: number;
-  total_estimated_cost_usd: number;
-  avg_latency_ms: number;
-  simulated_executions: number;
-};
-
-type ProductRow = {
-  id: string;
-  sku: string;
-  name: string;
-  category: string;
-  unit_price: number;
-  tax_rate: number;
-  available_stock: number;
-  source: string;
-};
-
-type DocumentRow = {
-  id: string;
-  file_name: string;
-  mime_type: string | null;
-  classification: string;
-  dlp_findings: string[];
-  created_at: string | null;
-};
-
-type AgentRow = {
-  agent_id: string;
-  name: string;
-  purpose: string;
-  status?: string;
-};
-
-type UserRow = {
-  id: string;
-  username: string;
-  role: string;
-  is_active: boolean;
-  must_change_password: boolean;
-};
-
-type SectionId =
-  | "resumen"
-  | "aprobaciones"
-  | "catalogo"
-  | "documentos"
-  | "agentes"
-  | "clientes"
-  | "automatizaciones"
-  | "usuarios";
-
-const ADMIN_ROLES = new Set(["provider_admin", "client_admin"]);
-const OPERATOR_ROLES = new Set([
-  "provider_admin",
-  "client_admin",
-  "supervisor",
-  "commercial",
-  "support",
-  "operator",
-]);
-
-const API_BASE = "/api/bridge";
-
-async function api<T>(
-  path: string,
-  token: string,
-  init?: RequestInit,
-): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...(init?.headers ?? {}),
-    },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail =
-      typeof data.detail === "string"
-        ? data.detail
-        : "No se pudo completar la operación";
-    throw new Error(detail);
-  }
-  return data as T;
-}
-
-function Login({
-  onLogin,
-}: {
-  onLogin: (
-    token: string,
-    username: string,
-    role: string,
-    mustChangePassword: boolean,
-  ) => void;
-}) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setLoading(true);
-    setError("");
-    try {
-      const response = await fetch(`${API_BASE}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      const data = await response.json();
-      if (!response.ok)
-        throw new Error(data.detail ?? "No se pudo iniciar sesión");
-      onLogin(
-        data.access_token,
-        data.username,
-        data.role ?? "",
-        Boolean(data.must_change_password),
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error inesperado");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <main className="login-shell">
-      <section className="login-card" aria-labelledby="login-title">
-        <div className="brand-mark">AI</div>
-        <h1 id="login-title">Plataforma de agentes IA</h1>
-        <p>Accede al panel de control de tu instalación.</p>
-        <form onSubmit={submit}>
-          <label>
-            Usuario
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
-              required
-            />
-          </label>
-          <label>
-            Contraseña
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </label>
-          {error && (
-            <div className="alert error" role="alert">
-              {error}
-            </div>
-          )}
-          <button className="primary-button" disabled={loading}>
-            {loading ? "Accediendo…" : "Acceder"}
-          </button>
-        </form>
-      </section>
-    </main>
-  );
-}
-
-function ChangePassword({
-  token,
-  onComplete,
-  onLogout,
-}: {
-  token: string;
-  onComplete: () => void;
-  onLogout: () => void;
-}) {
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmation, setConfirmation] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    setError("");
-    if (newPassword !== confirmation) {
-      setError("Las contraseñas nuevas no coinciden");
-      return;
-    }
-    setLoading(true);
-    try {
-      await api("/auth/change-password", token, {
-        method: "POST",
-        body: JSON.stringify({
-          current_password: currentPassword,
-          new_password: newPassword,
-        }),
-      });
-      onComplete();
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "No se pudo cambiar la contraseña",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <main className="login-shell">
-      <section className="login-card" aria-labelledby="password-title">
-        <div className="brand-mark">AI</div>
-        <h1 id="password-title">Cambia la contraseña temporal</h1>
-        <p>
-          Por seguridad, debes crear una contraseña personal antes de acceder al
-          panel.
-        </p>
-        <form onSubmit={submit}>
-          <label>
-            Contraseña temporal
-            <input
-              type="password"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </label>
-          <label>
-            Nueva contraseña
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              autoComplete="new-password"
-              minLength={12}
-              required
-            />
-          </label>
-          <label>
-            Repite la nueva contraseña
-            <input
-              type="password"
-              value={confirmation}
-              onChange={(e) => setConfirmation(e.target.value)}
-              autoComplete="new-password"
-              minLength={12}
-              required
-            />
-          </label>
-          <p className="password-help">
-            Mínimo 12 caracteres, con mayúscula, minúscula, número y símbolo.
-          </p>
-          {error && (
-            <div className="alert error" role="alert">
-              {error}
-            </div>
-          )}
-          <button className="primary-button" disabled={loading}>
-            {loading ? "Guardando…" : "Cambiar contraseña"}
-          </button>
-          <button
-            type="button"
-            className="secondary-button full-width"
-            onClick={onLogout}
-          >
-            Volver al acceso
-          </button>
-        </form>
-      </section>
-    </main>
-  );
-}
-
-function ProductsSection({
-  token,
-  canImport,
-}: {
-  token: string;
-  canImport: boolean;
-}) {
-  const [rows, setRows] = useState<ProductRow[] | null>(null);
-  const [error, setError] = useState("");
-  const [importForm, setImportForm] = useState({
-    sku: "",
-    name: "",
-    category: "Industrial",
-    base_price: "0.00",
-    stock_quantity: "0",
-  });
-  const [importing, setImporting] = useState(false);
-  const [importResult, setImportResult] = useState("");
-
-  async function importProduct(event: FormEvent) {
-    event.preventDefault();
-    setImporting(true);
-    setImportResult("");
-    try {
-      const result = await api<{ status: string; created?: number }>(
-        "/import/products",
-        token,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            items: [
-              {
-                sku: importForm.sku.trim(),
-                name: importForm.name.trim(),
-                category: importForm.category.trim(),
-                base_price: Number(importForm.base_price),
-                tax_rate: 0.21,
-                stock_quantity: Number(importForm.stock_quantity),
-                source: "local",
-              },
-            ],
-            dry_run: false,
-          }),
-        },
-      );
-      setImportResult(
-        `Importado: ${result.status}${result.created != null ? ` (${result.created} productos)` : ""}`,
-      );
-      setImportForm({
-        sku: "",
-        name: "",
-        category: "Industrial",
-        base_price: "0.00",
-        stock_quantity: "0",
-      });
-      const data = await api<ProductRow[]>("/tools/products", token);
-      setRows(data);
-    } catch (err) {
-      setImportResult(
-        err instanceof Error ? err.message : "No se pudo importar",
-      );
-    } finally {
-      setImporting(false);
-    }
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    api<ProductRow[]>("/tools/products", token)
-      .then((data) => {
-        if (!cancelled) setRows(data);
-      })
-      .catch((err) => {
-        if (!cancelled)
-          setError(
-            err instanceof Error
-              ? err.message
-              : "No se pudo cargar el catálogo",
-          );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
-
-  return (
-    <section id="catalogo" className="panel" aria-label="Catálogo de productos">
-      <div className="panel-heading">
-        <div>
-          <p>Catálogo</p>
-          <h2>Productos</h2>
-        </div>
-        <span className="counter">{rows?.length ?? 0}</span>
-      </div>
-      {error && (
-        <div className="alert error" role="alert">
-          {error}
-        </div>
-      )}
-      {!error && rows === null && (
-        <div className="empty-state">Cargando catálogo…</div>
-      )}
-      {!error && rows !== null && rows.length === 0 && (
-        <div className="empty-state">
-          No hay productos disponibles en esta instalación.
-        </div>
-      )}
-      {!error && rows !== null && rows.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Nombre</th>
-                <th>SKU</th>
-                <th>Categoría</th>
-                <th>Precio unitario</th>
-                <th>Stock disponible</th>
-                <th>Origen</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.name}</td>
-                  <td>{row.sku}</td>
-                  <td>{row.category || "—"}</td>
-                  <td>{row.unit_price.toFixed(2)} €</td>
-                  <td>{row.available_stock}</td>
-                  <td>{row.source}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {canImport && (
-        <form
-          className="import-form"
-          onSubmit={(event) => void importProduct(event)}
-          aria-label="Importar producto"
-        >
-          <p>Importar producto al catálogo local</p>
-          <div className="import-grid">
-            <label>
-              SKU
-              <input
-                value={importForm.sku}
-                onChange={(e) =>
-                  setImportForm({ ...importForm, sku: e.target.value })
-                }
-                required
-              />
-            </label>
-            <label>
-              Nombre
-              <input
-                value={importForm.name}
-                onChange={(e) =>
-                  setImportForm({ ...importForm, name: e.target.value })
-                }
-                required
-              />
-            </label>
-            <label>
-              Categoría
-              <input
-                value={importForm.category}
-                onChange={(e) =>
-                  setImportForm({ ...importForm, category: e.target.value })
-                }
-              />
-            </label>
-            <label>
-              Precio unitario
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                value={importForm.base_price}
-                onChange={(e) =>
-                  setImportForm({ ...importForm, base_price: e.target.value })
-                }
-                required
-              />
-            </label>
-            <label>
-              Stock
-              <input
-                type="number"
-                min="0"
-                value={importForm.stock_quantity}
-                onChange={(e) =>
-                  setImportForm({
-                    ...importForm,
-                    stock_quantity: e.target.value,
-                  })
-                }
-                required
-              />
-            </label>
-            <button className="primary-button" disabled={importing}>
-              {importing ? "Importando…" : "Importar"}
-            </button>
-          </div>
-          {importResult && (
-            <div className="alert info" role="status">
-              {importResult}
-            </div>
-          )}
-        </form>
-      )}
-    </section>
-  );
-}
-
-function LeadsSection({ token }: { token: string }) {
-  const [rows, setRows] = useState<LeadRow[] | null>(null);
-  const [error, setError] = useState("");
-  const [form, setForm] = useState({
-    email: "",
-    first_name: "",
-    phone: "",
-    company_name: "",
-  });
-  const [creating, setCreating] = useState(false);
-  const [createResult, setCreateResult] = useState("");
-
-  async function loadLeads() {
-    try {
-      setRows(await api<LeadRow[]>("/leads", token));
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "No se pudieron cargar los leads",
-      );
-    }
-  }
-
-  useEffect(() => {
-    void loadLeads();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-
-  async function createLead(event: FormEvent) {
-    event.preventDefault();
-    setCreating(true);
-    setCreateResult("");
-    try {
-      await api("/leads", token, {
-        method: "POST",
-        body: JSON.stringify({
-          email: form.email.trim(),
-          first_name: form.first_name.trim(),
-          phone: form.phone.trim() || null,
-          company_name: form.company_name.trim() || null,
-        }),
-      });
-      setCreateResult("Lead creado");
-      setForm({ email: "", first_name: "", phone: "", company_name: "" });
-      await loadLeads();
-    } catch (err) {
-      setCreateResult(
-        err instanceof Error ? err.message : "No se pudo crear el lead",
-      );
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  return (
-    <section
-      id="clientes"
-      className="panel"
-      aria-label="Clientes y oportunidades"
-    >
-      <div className="panel-heading">
-        <div>
-          <p>CRM local</p>
-          <h2>Leads y oportunidades</h2>
-        </div>
-        <span className="counter">{rows?.length ?? 0}</span>
-      </div>
-      {error && (
-        <div className="alert error" role="alert">
-          {error}
-        </div>
-      )}
-      {!error && rows === null && (
-        <div className="empty-state">Cargando leads…</div>
-      )}
-      {!error && rows !== null && rows.length === 0 && (
-        <div className="empty-state">
-          No hay leads en esta instalación. Crea el primero con el formulario.
-        </div>
-      )}
-      {!error && rows !== null && rows.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Cliente</th>
-                <th>Email</th>
-                <th>Oportunidades</th>
-                <th>Estado</th>
-                <th>Alta</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((lead) => (
-                <tr key={lead.id}>
-                  <td>
-                    {lead.first_name}
-                    {lead.company_name ? ` (${lead.company_name})` : ""}
-                  </td>
-                  <td>{lead.email}</td>
-                  <td>
-                    {lead.opportunities.length === 0
-                      ? "—"
-                      : lead.opportunities
-                          .map(
-                            (opp) =>
-                              `${opp.name} · ${opp.monetary_value.toFixed(2)} ${opp.currency}`,
-                          )
-                          .join(" / ")}
-                  </td>
-                  <td>{lead.status}</td>
-                  <td>
-                    {lead.created_at
-                      ? new Date(lead.created_at).toLocaleString("es-ES")
-                      : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <form
-        className="import-form"
-        onSubmit={(event) => void createLead(event)}
-        aria-label="Nuevo lead"
-      >
-        <p>Nuevo lead</p>
-        <div className="import-grid">
-          <label>
-            Email
-            <input
-              type="email"
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-              required
-            />
-          </label>
-          <label>
-            Nombre
-            <input
-              value={form.first_name}
-              onChange={(e) => setForm({ ...form, first_name: e.target.value })}
-              required
-            />
-          </label>
-          <label>
-            Teléfono
-            <input
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-            />
-          </label>
-          <label>
-            Empresa
-            <input
-              value={form.company_name}
-              onChange={(e) =>
-                setForm({ ...form, company_name: e.target.value })
-              }
-            />
-          </label>
-          <button className="primary-button" disabled={creating}>
-            {creating ? "Creando…" : "Crear lead"}
-          </button>
-        </div>
-        {createResult && (
-          <div className="alert info" role="status">
-            {createResult}
-          </div>
-        )}
-      </form>
-    </section>
-  );
-}
-
-function DocumentsSection({ token }: { token: string }) {
-  const [rows, setRows] = useState<DocumentRow[] | null>(null);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    api<{ documents: DocumentRow[] }>("/rag/documents", token)
-      .then((data) => {
-        if (!cancelled) setRows(data.documents);
-      })
-      .catch((err) => {
-        if (!cancelled)
-          setError(
-            err instanceof Error
-              ? err.message
-              : "No se pudieron cargar los documentos",
-          );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
-
-  return (
-    <section id="documentos" className="panel" aria-label="Documentos RAG">
-      <div className="panel-heading">
-        <div>
-          <p>Conocimiento</p>
-          <h2>Documentos</h2>
-        </div>
-        <span className="counter">{rows?.length ?? 0}</span>
-      </div>
-      {error && (
-        <div className="alert error" role="alert">
-          {error}
-        </div>
-      )}
-      {!error && rows === null && (
-        <div className="empty-state">Cargando documentos…</div>
-      )}
-      {!error && rows !== null && rows.length === 0 && (
-        <div className="empty-state">
-          No hay documentos indexados en esta instalación.
-        </div>
-      )}
-      {!error && rows !== null && rows.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Archivo</th>
-                <th>Clasificación</th>
-                <th>Hallazgos DLP</th>
-                <th>Alta</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.file_name}</td>
-                  <td>{row.classification}</td>
-                  <td>
-                    {row.dlp_findings.length > 0
-                      ? row.dlp_findings.join(", ")
-                      : "—"}
-                  </td>
-                  <td>
-                    {row.created_at
-                      ? new Date(row.created_at).toLocaleString("es-ES")
-                      : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function AgentsSection({ token }: { token: string }) {
-  const [rows, setRows] = useState<AgentRow[] | null>(null);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    api<{ agents: AgentRow[] }>("/agents", token)
-      .then((data) => {
-        if (!cancelled) setRows(data.agents);
-      })
-      .catch((err) => {
-        if (!cancelled)
-          setError(
-            err instanceof Error
-              ? err.message
-              : "No se pudieron cargar los agentes",
-          );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
-
-  return (
-    <section id="agentes" className="panel" aria-label="Agentes de IA">
-      <div className="panel-heading">
-        <div>
-          <p>IA</p>
-          <h2>Agentes de IA</h2>
-        </div>
-        <span className="counter">{rows?.length ?? 0}</span>
-      </div>
-      {error && (
-        <div className="alert error" role="alert">
-          {error}
-        </div>
-      )}
-      {!error && rows === null && (
-        <div className="empty-state">Cargando agentes…</div>
-      )}
-      {!error && rows !== null && rows.length === 0 && (
-        <div className="empty-state">
-          No hay agentes registrados en esta instalación.
-        </div>
-      )}
-      {!error && rows !== null && rows.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Agente</th>
-                <th>Propósito</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.agent_id}>
-                  <td>{row.name}</td>
-                  <td>{row.purpose}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function UsersSection({ token }: { token: string }) {
-  const [rows, setRows] = useState<UserRow[] | null>(null);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    api<UserRow[]>("/users", token)
-      .then((data) => {
-        if (!cancelled) setRows(data);
-      })
-      .catch((err) => {
-        if (!cancelled)
-          setError(
-            err instanceof Error
-              ? err.message
-              : "No se pudieron cargar los usuarios",
-          );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
-
-  return (
-    <section id="usuarios" className="panel" aria-label="Usuarios y permisos">
-      <div className="panel-heading">
-        <div>
-          <p>Control de acceso</p>
-          <h2>Usuarios y permisos</h2>
-        </div>
-        <span className="counter">{rows?.length ?? 0}</span>
-      </div>
-      {error && (
-        <div className="alert error" role="alert">
-          {error}. Esta sección requiere rol administrador.
-        </div>
-      )}
-      {!error && rows === null && (
-        <div className="empty-state">Cargando usuarios…</div>
-      )}
-      {!error && rows !== null && rows.length === 0 && (
-        <div className="empty-state">No hay usuarios registrados.</div>
-      )}
-      {!error && rows !== null && rows.length > 0 && (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Usuario</th>
-                <th>Rol</th>
-                <th>Activo</th>
-                <th>Cambio de contraseña pendiente</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.username}</td>
-                  <td>{row.role}</td>
-                  <td>{row.is_active ? "Sí" : "No"}</td>
-                  <td>{row.must_change_password ? "Sí" : "No"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function AutomationsSection({ dashboard }: { dashboard: Dashboard | null }) {
-  const activepieces = dashboard?.integrations?.activepieces;
-  return (
-    <section
-      id="automatizaciones"
-      className="panel"
-      aria-label="Automatizaciones"
-    >
-      <div className="panel-heading">
-        <div>
-          <p>Flujos</p>
-          <h2>Automatizaciones</h2>
-        </div>
-        <Workflow size={21} />
-      </div>
-      <div className="integration-list">
-        <div className="integration-row">
-          <span>Activepieces</span>
-          <span
-            className={`status ${activepieces === "configured" ? "ok" : "warning"}`}
-          >
-            <CheckCircle2 size={14} />
-            {activepieces === "configured"
-              ? "Configurado"
-              : "Pendiente de configuración"}
-          </span>
-        </div>
-      </div>
-      <div className="empty-state">
-        El diseñador de automatizaciones no forma parte de la candidata core
-        (Ruta A). Los flujos se ejecutan a través del bridge con validación,
-        auditoría y aprobaciones; consulta la documentación de integraciones
-        para habilitar Activepieces.
-      </div>
-    </section>
-  );
-}
+import { CeoChat, type CeoChatHandle } from "./ceoChat";
+import {
+  completeOnboarding,
+  getOnboardingMode,
+  OnboardingOverlay,
+  type OnboardingMode,
+} from "./onboarding";
+import { EmailSection } from "./email";
+import { WebhooksSection } from "./webhooks";
+import {
+  AgentRegistrySection,
+  CommerceSection,
+  ContentGrowthSection,
+  SchedulerSection,
+} from "./productionModules";
+import { ChangePassword, Login } from "./sections/Login";
+import { ProductsSection } from "./sections/Products";
+import { ClientesSection } from "./sections/Clients";
+import { DocumentsSection } from "./sections/Documents";
+import { UsersSection } from "./sections/Users";
+import { AutomationsSection } from "./sections/Automations";
+import { TodaySection } from "./today";
 
 export default function App() {
   const [token, setToken] = useState(
@@ -1004,56 +81,226 @@ export default function App() {
   const [username, setUsername] = useState(
     () => sessionStorage.getItem("agent_user") ?? "",
   );
-  const [role, setRole] = useState(
-    () => sessionStorage.getItem("agent_role") ?? "",
-  );
   const [mustChangePassword, setMustChangePassword] = useState(
     () => sessionStorage.getItem("agent_must_change") === "true",
   );
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [costs, setCosts] = useState<CostSummary | null>(null);
+  const [syncHistory, setSyncHistory] = useState<SyncHistoryRow[] | null>(null);
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [approvalsError, setApprovalsError] = useState("");
   const [costsError, setCostsError] = useState("");
+  const [syncHistoryError, setSyncHistoryError] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [section, setSection] = useState<SectionId>("resumen");
+  const [loginNotice, setLoginNotice] = useState("");
+  const [section, setSection] = useState<SectionId>(sectionFromHash);
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const [decisionIntent, setDecisionIntent] = useState<ApprovalIntent | null>(
+    null,
+  );
+  const [decisionConfirmation, setDecisionConfirmation] = useState("");
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [decisionError, setDecisionError] = useState("");
+  const [deciding, setDeciding] = useState(false);
+  const [runningAgents, setRunningAgents] = useState(false);
+  const [agentsNotice, setAgentsNotice] = useState("");
+  const decisionInputRef = useRef<HTMLInputElement>(null);
+  const loadRevisionRef = useRef(0);
   const [theme, setTheme] = useState<"light" | "dark">(
     () => (localStorage.getItem("theme") as "light" | "dark") ?? "light",
   );
+  const [accent, setAccent] = useState<string>(
+    () => localStorage.getItem("accent") ?? DEFAULT_ACCENT,
+  );
+  const [density, setDensity] = useState<"comfortable" | "compact">(
+    () =>
+      (localStorage.getItem("density") as "comfortable" | "compact") ??
+      "comfortable",
+  );
+  const [guidedMode, setGuidedMode] = useState<OnboardingMode>(() =>
+    getOnboardingMode(),
+  );
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  // Modo simple por defecto: oculta las secciones técnicas hasta que el
+  // usuario las pida. La preferencia se persiste por navegador/instalación.
+  const [advancedMode, setAdvancedMode] = useState<boolean>(
+    () => localStorage.getItem("advanced-mode") === "on",
+  );
+  const chatRef = useRef<CeoChatHandle | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem("advanced-mode", advancedMode ? "on" : "off");
+  }, [advancedMode]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("theme", theme);
   }, [theme]);
 
-  // RBAC: el backend es la autoridad (/dashboard expone permissions); el
-  // fallback por rol solo se usa mientras el dashboard no ha cargado (T-024).
+  useEffect(() => {
+    document.documentElement.dataset.density = density;
+    localStorage.setItem("density", density);
+  }, [density]);
+
+  useEffect(() => {
+    const style = document.documentElement.style;
+    style.setProperty("--accent", accent);
+    style.setProperty(
+      "--accent-soft",
+      `color-mix(in srgb, ${accent} 12%, transparent)`,
+    );
+  }, [accent]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    api<{ accent_color?: string }>("/appearance/settings", token)
+      .then((data) => {
+        if (cancelled || !data?.accent_color) return;
+        if (!/^#[0-9a-fA-F]{6}$/.test(data.accent_color)) return;
+        setAccent(data.accent_color);
+        localStorage.setItem("accent", data.accent_color);
+      })
+      .catch(() => {
+        // Sin conexión o instalación antigua: se mantiene el acento local.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    const expireSession = () => {
+      loadRevisionRef.current += 1;
+      clearStoredSession();
+      setToken("");
+      setUsername("");
+      setMustChangePassword(false);
+      setDashboard(null);
+      setApprovals([]);
+      setCosts(null);
+      setSyncHistory(null);
+      setDecisionIntent(null);
+      setLoginNotice(
+        "Tu sesión ha caducado o ha sido revocada. Vuelve a identificarte.",
+      );
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, expireSession);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, expireSession);
+  }, []);
+
+  useEffect(() => {
+    // Onboarding: al confirmar la sesión (dashboard cargado) y sin
+    // preferencia guardada, se abre el asistente guiado de primeros pasos.
+    if (dashboard && guidedMode === "active") {
+      setOnboardingOpen(true);
+    }
+  }, [dashboard, guidedMode]);
+
+  useEffect(() => {
+    if (!decisionIntent) return;
+    decisionInputRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !deciding) setDecisionIntent(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [deciding, decisionIntent]);
+
+  // RBAC: el backend es la única autoridad. Hasta que /dashboard responda,
+  // todas las acciones sensibles permanecen cerradas (fail-closed).
   const permissions = dashboard?.permissions ?? {
-    approve: OPERATOR_ROLES.has(role),
-    manage_leads: OPERATOR_ROLES.has(role),
-    manage_users: ADMIN_ROLES.has(role),
-    view_costs: ADMIN_ROLES.has(role),
-    import_catalog: ADMIN_ROLES.has(role),
+    approve: false,
+    manage_leads: false,
+    manage_users: false,
+    view_costs: false,
+    import_catalog: false,
   };
+  // Las capacidades de módulos nuevos se derivan del rol confirmado por
+  // /dashboard. Las decisiones de aprobación siguen limitadas a ADMIN_ROLES.
+  const isAdmin = ADMIN_ROLES.has(dashboard?.role ?? "");
+  const canOperateBusiness = OPERATOR_ROLES.has(dashboard?.role ?? "");
+  const canDecideApprovals = isAdmin;
+
+  useEffect(() => {
+    const syncSectionWithHash = () => {
+      const candidate = sectionFromHash();
+      if (!dashboard) {
+        setSection("asistente");
+        return;
+      }
+      const allowedByRole =
+        candidate === "asistente" ||
+        candidate === "resumen" ||
+        candidate === "catalogo" ||
+        candidate === "documentos" ||
+        candidate === "agentes" ||
+        candidate === "automatizaciones" ||
+        (candidate === "aprobaciones" && permissions.approve) ||
+        (candidate === "clientes" && permissions.manage_leads) ||
+        (candidate === "ventas" && canOperateBusiness) ||
+        (candidate === "contenido" && canOperateBusiness) ||
+        (candidate === "tareas" && isAdmin) ||
+        (candidate === "webhooks" && isAdmin) ||
+        (candidate === "email" && isAdmin) ||
+        (candidate === "usuarios" && permissions.manage_users);
+      // En modo simple las secciones técnicas no son alcanzables ni por hash.
+      const allowed =
+        allowedByRole && (advancedMode || !ADVANCED_SECTIONS.has(candidate));
+      if (allowed) {
+        setSection(candidate);
+      } else {
+        setSection("asistente");
+        window.history.replaceState(null, "", "#asistente");
+      }
+    };
+    syncSectionWithHash();
+    window.addEventListener("hashchange", syncSectionWithHash);
+    return () => window.removeEventListener("hashchange", syncSectionWithHash);
+  }, [
+    dashboard,
+    advancedMode,
+    canOperateBusiness,
+    isAdmin,
+    permissions.approve,
+    permissions.manage_leads,
+    permissions.manage_users,
+  ]);
+
+  useEffect(() => {
+    document.title = `${SECTION_TITLES[section]} · Plataforma de agentes IA`;
+  }, [section]);
 
   // Carga parcial por rol: cada bloque es independiente y un 403 nunca
   // tumba el resto del panel (antes Promise.all hacía fallar todo el load).
   async function load() {
-    if (!token) return;
+    const revision = ++loadRevisionRef.current;
+    const requestToken = token;
+    const isCurrent = () => revision === loadRevisionRef.current;
+    if (!requestToken) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError("");
     try {
-      const dashboardData = await api<Dashboard>("/dashboard", token);
+      const dashboardData = await api<Dashboard>("/dashboard", requestToken);
+      if (!isCurrent()) return;
       setDashboard(dashboardData);
+      sessionStorage.setItem("agent_role", dashboardData.role);
       const perms = dashboardData.permissions;
       if (perms.approve) {
         try {
-          setApprovals(
-            await api<Approval[]>("/approvals?status_filter=pending", token),
+          const nextApprovals = await api<Approval[]>(
+            "/approvals?status_filter=pending",
+            requestToken,
           );
+          if (!isCurrent()) return;
+          setApprovals(nextApprovals);
           setApprovalsError("");
         } catch (err) {
+          if (!isCurrent()) return;
           setApprovals([]);
           setApprovalsError(
             err instanceof Error
@@ -1063,12 +310,16 @@ export default function App() {
         }
       } else {
         setApprovals([]);
+        setApprovalsError("");
       }
       if (perms.view_costs) {
         try {
-          setCosts(await api<CostSummary>("/costs", token));
+          const nextCosts = await api<CostSummary>("/costs", requestToken);
+          if (!isCurrent()) return;
+          setCosts(nextCosts);
           setCostsError("");
         } catch (err) {
+          if (!isCurrent()) return;
           setCosts(null);
           setCostsError(
             err instanceof Error
@@ -1078,13 +329,36 @@ export default function App() {
         }
       } else {
         setCosts(null);
+        setCostsError("");
+      }
+      try {
+        const history = await api<{ history: SyncHistoryRow[] }>(
+          "/integrations/prestashop/sync/history?limit=8",
+          requestToken,
+        );
+        if (!isCurrent()) return;
+        setSyncHistory(history.history ?? []);
+        setSyncHistoryError("");
+      } catch (err) {
+        if (!isCurrent()) return;
+        setSyncHistory(null);
+        setSyncHistoryError(
+          err instanceof Error
+            ? err.message
+            : "No se pudo cargar el historial de sincronización",
+        );
       }
     } catch (err) {
+      if (!isCurrent()) return;
+      setDashboard(null);
+      setApprovals([]);
+      setCosts(null);
+      setSyncHistory(null);
       setError(
         err instanceof Error ? err.message : "No se pudieron cargar los datos",
       );
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }
 
@@ -1093,60 +367,154 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  function refreshAll() {
+    setRefreshRevision((value) => value + 1);
+    void load();
+  }
+
+  function toggleAdvancedMode() {
+    const next = !advancedMode;
+    setAdvancedMode(next);
+    if (!next && ADVANCED_SECTIONS.has(section)) {
+      setSection("asistente");
+      window.history.replaceState(null, "", "#asistente");
+    }
+  }
+
   function onLogin(
     nextToken: string,
     nextUsername: string,
     nextRole: string,
     nextMustChange: boolean,
   ) {
+    loadRevisionRef.current += 1;
+    setLoginNotice("");
     sessionStorage.setItem("agent_token", nextToken);
     sessionStorage.setItem("agent_user", nextUsername);
     sessionStorage.setItem("agent_role", nextRole);
     sessionStorage.setItem("agent_must_change", String(nextMustChange));
     setToken(nextToken);
     setUsername(nextUsername);
-    setRole(nextRole);
     setMustChangePassword(nextMustChange);
   }
 
   async function logout() {
-    if (token) {
-      try {
-        await api("/auth/logout", token, { method: "POST" });
-      } catch {
-        // La sesión local debe cerrarse aunque el servidor no responda.
-      }
-    }
-    sessionStorage.clear();
+    const logoutToken = token;
+    loadRevisionRef.current += 1;
+    clearStoredSession();
     setToken("");
     setUsername("");
-    setRole("");
     setMustChangePassword(false);
+    setDashboard(null);
+    setApprovals([]);
+    setCosts(null);
+    setSyncHistory(null);
+    setDecisionIntent(null);
+    setSection("resumen");
+    window.history.replaceState(null, "", "#resumen");
+    if (logoutToken) {
+      try {
+        await apiRequest("/auth/logout", {
+          token: logoutToken,
+          method: "POST",
+          expireSessionOnUnauthorized: false,
+        });
+      } catch {
+        // La sesión local ya está cerrada aunque el servidor no responda.
+      }
+    }
   }
 
   function passwordChanged() {
-    sessionStorage.clear();
+    loadRevisionRef.current += 1;
+    clearStoredSession();
     setToken("");
     setUsername("");
-    setRole("");
     setMustChangePassword(false);
+    setLoginNotice("Contraseña actualizada. Inicia sesión de nuevo.");
   }
 
-  async function decide(id: string, decision: "approve" | "reject") {
+  function openDecision(approval: Approval, decision: "approve" | "reject") {
+    setDecisionIntent({ approval, decision });
+    setDecisionConfirmation("");
+    setRejectionReason("");
+    setDecisionError("");
+  }
+
+  function closeDecision() {
+    if (deciding) return;
+    setDecisionIntent(null);
+    setDecisionConfirmation("");
+    setRejectionReason("");
+    setDecisionError("");
+  }
+
+  async function runAgentProposals() {
+    if (!canDecideApprovals || runningAgents) return;
+    setRunningAgents(true);
+    setAgentsNotice("");
+    setApprovalsError("");
     try {
-      await api(`/approvals/${id}/${decision}`, token, {
+      const result = await api<{
+        proposed: number;
+        by_agent: Record<string, number>;
+      }>("/agent-proposals/run", token, { method: "POST" });
+      const parts = Object.entries(result.by_agent)
+        .filter(([, count]) => count > 0)
+        .map(([agent, count]) => `${count} de ${agent}`);
+      setAgentsNotice(
+        result.proposed > 0
+          ? `Propuestas creadas: ${parts.join(", ")}. Revisa y decide en este panel.`
+          : "Sin propuestas nuevas: los agentes ya habían propuesto o no hay señales pendientes.",
+      );
+      const nextApprovals = await api<Approval[]>(
+        "/approvals?status_filter=pending",
+        token,
+      );
+      setApprovals(nextApprovals);
+    } catch (err) {
+      setApprovalsError(
+        err instanceof Error
+          ? err.message
+          : "No se pudo ejecutar la ronda de agentes",
+      );
+    } finally {
+      setRunningAgents(false);
+    }
+  }
+
+  async function decide() {
+    if (!decisionIntent || !canDecideApprovals) return;
+    const { approval, decision } = decisionIntent;
+    if (decisionConfirmation.trim() !== approval.target_key) {
+      setDecisionError("La referencia escrita no coincide exactamente.");
+      return;
+    }
+    if (decision === "reject" && rejectionReason.trim().length < 5) {
+      setDecisionError("Indica un motivo de rechazo de al menos 5 caracteres.");
+      return;
+    }
+    setDeciding(true);
+    setDecisionError("");
+    try {
+      await api(`/approvals/${approval.id}/${decision}`, token, {
         method: "POST",
         body: JSON.stringify(
           decision === "reject"
-            ? { rejection_reason: "Rechazada desde el panel" }
+            ? { rejection_reason: rejectionReason.trim() }
             : {},
         ),
       });
+      setDecisionIntent(null);
+      setDecisionConfirmation("");
+      setRejectionReason("");
       await load();
     } catch (err) {
-      setError(
+      setDecisionError(
         err instanceof Error ? err.message : "No se pudo registrar la decisión",
       );
+    } finally {
+      setDeciding(false);
     }
   }
 
@@ -1155,7 +523,7 @@ export default function App() {
     [dashboard],
   );
 
-  if (!token) return <Login onLogin={onLogin} />;
+  if (!token) return <Login onLogin={onLogin} notice={loginNotice} />;
   if (mustChangePassword)
     return (
       <ChangePassword
@@ -1165,11 +533,24 @@ export default function App() {
       />
     );
 
-  const navItems: Array<{ id: SectionId; label: string; icon: ReactNode }> = [
+  const navItems: Array<{
+    id: SectionId;
+    label: string;
+    icon: ReactNode;
+    group: NavGroupId;
+  }> = [
+    // Inicio: la operación diaria en un solo lugar.
+    {
+      id: "asistente",
+      label: "Asistente",
+      icon: <MessageSquare size={18} />,
+      group: "inicio" as NavGroupId,
+    },
     {
       id: "resumen",
-      label: translations.nav.resumen,
+      label: "Hoy",
       icon: <Gauge size={18} />,
+      group: "inicio" as NavGroupId,
     },
     ...(permissions.approve
       ? [
@@ -1177,26 +558,53 @@ export default function App() {
             id: "aprobaciones" as SectionId,
             label: translations.nav.aprobaciones,
             icon: <ShieldCheck size={18} />,
+            group: "inicio" as NavGroupId,
           },
         ]
       : []),
-    {
-      id: "catalogo",
-      label: translations.nav.catalogo,
-      icon: <Package size={18} />,
-    },
-    {
-      id: "documentos",
-      label: translations.nav.documentos,
-      icon: <FileText size={18} />,
-    },
-    { id: "agentes", label: translations.nav.agentes, icon: <Bot size={18} /> },
+    // Ventas: el ciclo comercial (CRM + facturación).
     ...(permissions.manage_leads
       ? [
           {
             id: "clientes" as SectionId,
             label: translations.nav.clientes,
             icon: <Users size={18} />,
+            group: "ventas" as NavGroupId,
+          },
+        ]
+      : []),
+    ...(canOperateBusiness
+      ? [
+          {
+            id: "ventas" as SectionId,
+            label: "Ventas y facturación",
+            icon: <Boxes size={18} />,
+            group: "ventas" as NavGroupId,
+          },
+        ]
+      : []),
+    // Catálogo: lo que la empresa ofrece y la base de conocimiento del
+    // asistente (RAG).
+    {
+      id: "catalogo",
+      label: translations.nav.catalogo,
+      icon: <Package size={18} />,
+      group: "catalogo" as NavGroupId,
+    },
+    {
+      id: "documentos",
+      label: translations.nav.documentos,
+      icon: <FileText size={18} />,
+      group: "catalogo" as NavGroupId,
+    },
+    // Marketing: contenido, SEO y reglas automáticas de captación/seguimiento.
+    ...(canOperateBusiness
+      ? [
+          {
+            id: "contenido" as SectionId,
+            label: "Contenido y SEO",
+            icon: <FileText size={18} />,
+            group: "marketing" as NavGroupId,
           },
         ]
       : []),
@@ -1204,20 +612,73 @@ export default function App() {
       id: "automatizaciones",
       label: translations.nav.automatizaciones,
       icon: <Workflow size={18} />,
+      group: "marketing" as NavGroupId,
     },
+    // Ajustes: configuración y módulos técnicos (visibles según rol).
+    {
+      id: "agentes",
+      label: translations.nav.agentes,
+      icon: <Bot size={18} />,
+      group: "ajustes" as NavGroupId,
+    },
+    ...(isAdmin
+      ? [
+          {
+            id: "tareas" as SectionId,
+            label: "Tareas programadas",
+            icon: <Clock size={18} />,
+            group: "ajustes" as NavGroupId,
+          },
+          {
+            id: "webhooks" as SectionId,
+            label: "Webhooks salientes",
+            icon: <Webhook size={18} />,
+            group: "ajustes" as NavGroupId,
+          },
+          {
+            id: "email" as SectionId,
+            label: "Email integrado",
+            icon: <Mail size={18} />,
+            group: "ajustes" as NavGroupId,
+          },
+        ]
+      : []),
     ...(permissions.manage_users
       ? [
           {
             id: "usuarios" as SectionId,
             label: translations.nav.usuarios,
             icon: <ShieldCheck size={18} />,
+            group: "ajustes" as NavGroupId,
           },
         ]
       : []),
   ];
+  // Modo guiado (T-072): mientras el onboarding no esté completado, la barra
+  // lateral solo muestra Asistente y Resumen. El resto aparece al terminar
+  // (o pulsando «Mostrar todos los módulos»).
+  const visibleNavItems =
+    guidedMode === "active"
+      ? navItems.filter(
+          (item) => item.id === "asistente" || item.id === "resumen",
+        )
+      : advancedMode
+        ? navItems
+        : navItems.filter((item) => !ADVANCED_SECTIONS.has(item.id));
+
+  // Menú agrupado por intención: los grupos sin secciones permitidas por el
+  // rol no se renderizan (p. ej. un viewer no ve «Ventas»).
+  const navGroups = NAV_GROUP_ORDER.map((groupId) => ({
+    id: groupId,
+    label: NAV_GROUP_LABELS[groupId],
+    items: visibleNavItems.filter((item) => item.group === groupId),
+  })).filter((group) => group.items.length > 0);
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#contenido-principal">
+        Saltar al contenido principal
+      </a>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark small">AI</div>
@@ -1227,47 +688,125 @@ export default function App() {
           </div>
         </div>
         <nav aria-label="Navegación principal">
-          {navItems.map((item) => (
-            <a
-              key={item.id}
-              href={`#${item.id}`}
-              className={section === item.id ? "active" : ""}
-              aria-current={section === item.id ? "page" : undefined}
-              onClick={(event) => {
-                event.preventDefault();
-                setSection(item.id);
-              }}
-            >
-              {item.icon}
-              {item.label}
-            </a>
+          {navGroups.map((group) => (
+            <div className="nav-group" key={group.id}>
+              <p className="nav-group-label">{group.label}</p>
+              {group.items.map((item) => (
+                <a
+                  key={item.id}
+                  href={`#${item.id}`}
+                  className={section === item.id ? "active" : ""}
+                  aria-current={section === item.id ? "page" : undefined}
+                  onClick={() => setSection(item.id)}
+                >
+                  {item.icon}
+                  {item.label}
+                </a>
+              ))}
+            </div>
           ))}
         </nav>
+        {guidedMode === "active" && (
+          <button
+            type="button"
+            className="sidebar-guided-exit"
+            onClick={() => {
+              completeOnboarding();
+              setGuidedMode("done");
+              setOnboardingOpen(false);
+            }}
+          >
+            Mostrar todos los módulos
+          </button>
+        )}
+        {guidedMode !== "active" && (
+          <button
+            type="button"
+            className="sidebar-mode-toggle"
+            aria-pressed={advancedMode}
+            aria-label={
+              advancedMode ? "Activar modo simple" : "Activar modo avanzado"
+            }
+            onClick={toggleAdvancedMode}
+          >
+            {advancedMode ? "Modo simple" : "Modo avanzado"}
+          </button>
+        )}
         <div className="sidebar-footer">
-          <span>{username}</span>
-          <button onClick={() => void logout()} aria-label="Cerrar sesión">
+          <span>
+            {username}
+            <small>
+              {dashboard?.role
+                ? roleLabel(dashboard.role)
+                : "Verificando permisos…"}
+            </small>
+          </span>
+          <button
+            type="button"
+            onClick={() => void logout()}
+            aria-label="Cerrar sesión"
+          >
             <LogOut size={17} />
           </button>
         </div>
       </aside>
 
-      <main className="content">
+      <main
+        id="contenido-principal"
+        className="content"
+        tabIndex={-1}
+        aria-busy={loading}
+      >
         <header className="topbar">
           <div>
             <p>Instalación</p>
-            <h1>Resumen operativo</h1>
+            <h1>{SECTION_TITLES[section]}</h1>
+            {dashboard && (
+              <span className="installation-meta">
+                {dashboard.installation_id} · v{dashboard.installed_version}
+              </span>
+            )}
           </div>
           <div className="topbar-actions">
-            <button
-              className="icon-button"
-              onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-              aria-label="Cambiar tema"
-            >
-              {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
-            </button>
+            <div className="segmented" role="group" aria-label="Tema">
+              <button
+                className="segmented-item"
+                onClick={() => setTheme("light")}
+                aria-label="Activar tema claro"
+                aria-pressed={theme === "light"}
+              >
+                Claro
+              </button>
+              <button
+                className="segmented-item"
+                onClick={() => setTheme("dark")}
+                aria-label="Activar tema oscuro"
+                aria-pressed={theme === "dark"}
+              >
+                Oscuro
+              </button>
+            </div>
+            <div className="segmented" role="group" aria-label="Densidad">
+              <button
+                className="segmented-item"
+                onClick={() => setDensity("comfortable")}
+                aria-label="Activar modo cómodo"
+                aria-pressed={density === "comfortable"}
+              >
+                Cómodo
+              </button>
+              <button
+                className="segmented-item"
+                onClick={() => setDensity("compact")}
+                aria-label="Activar modo compacto"
+                aria-pressed={density === "compact"}
+              >
+                Compacto
+              </button>
+            </div>
             <button
               className="secondary-button"
-              onClick={() => void load()}
+              onClick={refreshAll}
               disabled={loading}
             >
               <RefreshCw size={16} className={loading ? "spin" : ""} />
@@ -1290,7 +829,28 @@ export default function App() {
           </div>
         )}
 
+        <div hidden={section !== "asistente"}>
+          <section id="asistente" className="panel asistente-panel">
+            <div className="panel-heading">
+              <div>
+                <p>Tu empresa en una conversación</p>
+                <h2>Asistente</h2>
+              </div>
+              <span className="badge badge-green">Moneda: EUR</span>
+            </div>
+            <p className="muted">
+              Pregunta en lenguaje natural y el asistente consulta los datos
+              reales de todos los módulos (ventas, pipeline, leads, actividades,
+              aprobaciones, bandeja social, stock, agentes y automatizaciones).
+              Las acciones — follow-ups, pausar o activar automatizaciones —
+              quedan como propuestas que solo tienes que confirmar. Todo en
+              euros (EUR).
+            </p>
+            <CeoChat ref={chatRef} token={token} />
+          </section>
+        </div>
         <div hidden={section !== "resumen"}>
+          <TodaySection token={token} permissions={permissions} />
           <section
             id="resumen"
             className="metrics-grid"
@@ -1310,6 +870,11 @@ export default function App() {
               <span>Pedidos</span>
               <strong>{dashboard?.counts.orders ?? "—"}</strong>
               <Boxes size={20} />
+            </article>
+            <article className="metric">
+              <span>Presupuestos</span>
+              <strong>{dashboard?.counts.quotes ?? "—"}</strong>
+              <FileText size={20} />
             </article>
             <article className="metric">
               <span>Aprobaciones pendientes</span>
@@ -1333,27 +898,61 @@ export default function App() {
                     No hay información disponible.
                   </div>
                 )}
-                {integrationRows.map(([name, state]) => (
-                  <div className="integration-row" key={name}>
-                    <span>
-                      {name === "prestashop"
-                        ? "PrestaShop"
-                        : name === "ghl"
-                          ? "GHL"
-                          : name === "chatwoot"
-                            ? "Chatwoot"
-                            : "Activepieces"}
-                    </span>
-                    <span
-                      className={`status ${state === "configured" ? "ok" : "warning"}`}
-                    >
-                      <CheckCircle2 size={14} />
-                      {state === "configured"
-                        ? "Configurado"
-                        : "Pendiente de configuración"}
-                    </span>
+                {integrationRows.map(([name, state]) => {
+                  const status = integrationStatus(state);
+                  return (
+                    <div className="integration-row" key={name}>
+                      <span>{integrationLabel(name)}</span>
+                      <span className={`status ${status.className}`}>
+                        <CheckCircle2 size={14} />
+                        {status.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="sync-history">
+                <div className="sync-history-title">
+                  <Clock size={14} />
+                  Historial de sincronización
+                </div>
+                {syncHistoryError ? (
+                  <div className="empty-state compact">{syncHistoryError}</div>
+                ) : syncHistory === null ? (
+                  <div className="empty-state compact">Cargando…</div>
+                ) : syncHistory.length === 0 ? (
+                  <div className="empty-state compact">
+                    Todavía no hay ejecuciones registradas.
                   </div>
-                ))}
+                ) : (
+                  syncHistory.map((row) => (
+                    <div className="integration-row" key={row.id}>
+                      <span>
+                        {formatDate(row.started_at, false)}
+                        <small>
+                          {" "}
+                          · {row.incremental
+                            ? "incremental"
+                            : "completo"} ·{" "}
+                          {row.duration_seconds == null
+                            ? "—"
+                            : formatNumber(row.duration_seconds, 0)}{" "}
+                          s
+                          {row.total_remote > 0
+                            ? ` · ${row.total_remote} productos`
+                            : ""}
+                        </small>
+                        {row.error && (
+                          <small className="sync-error">{row.error}</small>
+                        )}
+                      </span>
+                      <span className={`status ${syncStatusClass(row.status)}`}>
+                        {syncStatusLabel(row.status)}
+                      </span>
+                    </div>
+                  ))
+                )}
               </div>
             </article>
 
@@ -1373,32 +972,46 @@ export default function App() {
                 <div className="alert error" role="alert">
                   {costsError}
                 </div>
+              ) : costs === null ? (
+                <div className="empty-state" role="status">
+                  Cargando consumo y costes…
+                </div>
               ) : (
-                <dl className="cost-list">
-                  <div>
-                    <dt>Ejecuciones</dt>
-                    <dd>{costs?.total_executions ?? "—"}</dd>
-                  </div>
-                  <div>
-                    <dt>Tokens</dt>
-                    <dd>
-                      {costs?.total_tokens_consumed?.toLocaleString("es-ES") ??
-                        "—"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Coste estimado</dt>
-                    <dd>
-                      {costs
-                        ? `${costs.total_estimated_cost_usd.toFixed(4)} USD`
-                        : "—"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Ejecuciones simuladas</dt>
-                    <dd>{costs?.simulated_executions ?? "—"}</dd>
-                  </div>
-                </dl>
+                <>
+                  {costs.simulated_executions > 0 && (
+                    <div className="alert error" role="alert">
+                      Se han registrado {costs.simulated_executions} ejecuciones
+                      simuladas. Revisa la configuración antes de usar este
+                      entorno como producción.
+                    </div>
+                  )}
+                  <dl className="cost-list">
+                    <div>
+                      <dt>Ejecuciones</dt>
+                      <dd>{costs.total_executions}</dd>
+                    </div>
+                    <div>
+                      <dt>Tokens</dt>
+                      <dd>
+                        {costs.total_tokens_consumed.toLocaleString("es-ES")}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Coste estimado</dt>
+                      <dd>
+                        {formatNumber(costs.total_estimated_cost_usd, 4)} USD
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Latencia media</dt>
+                      <dd>{formatNumber(costs.avg_latency_ms, 0)} ms</dd>
+                    </div>
+                    <div>
+                      <dt>Ejecuciones simuladas</dt>
+                      <dd>{costs.simulated_executions}</dd>
+                    </div>
+                  </dl>
+                </>
               )}
             </article>
           </section>
@@ -1413,7 +1026,22 @@ export default function App() {
                   <h2>Aprobaciones pendientes</h2>
                 </div>
                 <span className="counter">{approvals.length}</span>
+                {canDecideApprovals && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={runningAgents}
+                    onClick={runAgentProposals}
+                  >
+                    {runningAgents ? "Ejecutando…" : "Ejecutar agentes"}
+                  </button>
+                )}
               </div>
+              {agentsNotice && (
+                <div className="notice-box" role="status">
+                  {agentsNotice}
+                </div>
+              )}
               {approvalsError ? (
                 <div className="alert error" role="alert">
                   {approvalsError}
@@ -1426,47 +1054,89 @@ export default function App() {
               ) : (
                 <div className="table-wrap">
                   <table>
+                    <caption className="sr-only">
+                      Solicitudes de aprobación pendientes
+                    </caption>
                     <thead>
                       <tr>
-                        <th>Acción</th>
-                        <th>Referencia</th>
-                        <th>Fecha</th>
-                        <th>Estado</th>
-                        <th>Decisión</th>
+                        <th scope="col">Acción</th>
+                        <th scope="col">Objetivo</th>
+                        <th scope="col">Datos a revisar</th>
+                        <th scope="col">Fecha</th>
+                        <th scope="col">Estado</th>
+                        <th scope="col">Decisión</th>
                       </tr>
                     </thead>
                     <tbody>
                       {approvals.map((approval) => (
                         <tr key={approval.id}>
                           <td>
-                            {approval.action_type === "issue_invoice"
-                              ? "Aprobar borrador de factura"
-                              : approval.action_type}
+                            {approval.action_label ??
+                              approvalActionLabel(approval.action_type)}
                           </td>
-                          <td>{approval.target_key}</td>
                           <td>
-                            {new Date(approval.created_at).toLocaleString(
-                              "es-ES",
+                            <span className="approval-target">
+                              {approval.target_label ?? approval.target_key}
+                            </span>
+                            {approval.target_label &&
+                              approval.target_label !== approval.target_key && (
+                                <small className="muted-text">
+                                  {approval.target_key}
+                                </small>
+                              )}
+                          </td>
+                          <td>
+                            {Object.keys(approval.payload).length === 0 ? (
+                              "Sin detalle adicional"
+                            ) : (
+                              <details>
+                                <summary>Ver detalle</summary>
+                                <dl className="approval-details">
+                                  {Object.entries(approval.payload).map(
+                                    ([field, value]) => (
+                                      <div key={field}>
+                                        <dt>{approvalFieldLabel(field)}</dt>
+                                        <dd>
+                                          {approvalFieldValue(field, value)}
+                                        </dd>
+                                      </div>
+                                    ),
+                                  )}
+                                </dl>
+                              </details>
                             )}
                           </td>
+                          <td>{formatDate(approval.created_at)}</td>
                           <td>
                             <span className="status warning">Pendiente</span>
                           </td>
-                          <td className="actions">
-                            <button
-                              className="success-button"
-                              onClick={() =>
-                                void decide(approval.id, "approve")
-                              }
-                            >
-                              Aprobar
-                            </button>
-                            <button
-                              className="danger-button"
-                              onClick={() => void decide(approval.id, "reject")}
-                            >
-                              Rechazar
-                            </button>
+                          <td>
+                            {canDecideApprovals ? (
+                              <div className="actions">
+                                <button
+                                  type="button"
+                                  className="success-button"
+                                  onClick={() =>
+                                    openDecision(approval, "approve")
+                                  }
+                                  aria-label={`Aprobar ${approval.target_label ?? approval.target_key}`}
+                                >
+                                  Aprobar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="danger-button"
+                                  onClick={() =>
+                                    openDecision(approval, "reject")
+                                  }
+                                  aria-label={`Rechazar ${approval.target_label ?? approval.target_key}`}
+                                >
+                                  Rechazar
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="muted-text">Solo lectura</span>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -1482,28 +1152,208 @@ export default function App() {
           <ProductsSection
             token={token}
             canImport={permissions.import_catalog}
+            refreshRevision={refreshRevision}
+            active={section === "catalogo"}
           />
         </div>
+        {canOperateBusiness && (
+          <div hidden={section !== "ventas"}>
+            <CommerceSection
+              token={token}
+              canWrite={canOperateBusiness}
+              refreshRevision={refreshRevision}
+              active={section === "ventas"}
+            />
+          </div>
+        )}
         <div hidden={section !== "documentos"}>
-          <DocumentsSection token={token} />
+          <DocumentsSection token={token} refreshRevision={refreshRevision} />
         </div>
         <div hidden={section !== "agentes"}>
-          <AgentsSection token={token} />
+          <AgentRegistrySection
+            token={token}
+            canWrite={isAdmin}
+            refreshRevision={refreshRevision}
+          />
         </div>
         {permissions.manage_leads && (
           <div hidden={section !== "clientes"}>
-            <LeadsSection token={token} />
+            <ClientesSection
+              token={token}
+              isAdmin={isAdmin}
+              refreshRevision={refreshRevision}
+              active={section === "clientes"}
+            />
+          </div>
+        )}
+        {canOperateBusiness && (
+          <div hidden={section !== "contenido"}>
+            <ContentGrowthSection
+              token={token}
+              canWrite={isAdmin}
+              refreshRevision={refreshRevision}
+            />
+          </div>
+        )}
+        {isAdmin && (
+          <div hidden={section !== "tareas"}>
+            <SchedulerSection
+              token={token}
+              canWrite={isAdmin}
+              refreshRevision={refreshRevision}
+            />
+          </div>
+        )}
+        {isAdmin && (
+          <div hidden={section !== "webhooks"}>
+            <WebhooksSection token={token} refreshRevision={refreshRevision} />
+          </div>
+        )}
+        {isAdmin && (
+          <div hidden={section !== "email"}>
+            <EmailSection token={token} refreshRevision={refreshRevision} />
           </div>
         )}
         <div hidden={section !== "automatizaciones"}>
-          <AutomationsSection dashboard={dashboard} />
+          <AutomationsSection
+            token={token}
+            canWrite={isAdmin}
+            refreshRevision={refreshRevision}
+          />
         </div>
         {permissions.manage_users && (
           <div hidden={section !== "usuarios"}>
-            <UsersSection token={token} />
+            <UsersSection
+              token={token}
+              refreshRevision={refreshRevision}
+              accent={accent}
+              onAccentChange={setAccent}
+            />
+          </div>
+        )}
+
+        {decisionIntent && (
+          <div className="dialog-backdrop">
+            <section
+              className="confirmation-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="decision-title"
+              aria-describedby="decision-description"
+            >
+              <div>
+                <p>Acción sensible</p>
+                <h2 id="decision-title">
+                  {decisionIntent.decision === "approve"
+                    ? "Confirmar aprobación"
+                    : "Confirmar rechazo"}
+                </h2>
+              </div>
+              <p id="decision-description">
+                {decisionIntent.approval.action_label ??
+                  approvalActionLabel(decisionIntent.approval.action_type)}{" "}
+                sobre{" "}
+                <strong>
+                  {decisionIntent.approval.target_label ??
+                    decisionIntent.approval.target_key}
+                </strong>
+                . Esta decisión quedará auditada y no debe tomarse sin revisar
+                los datos de la solicitud.
+              </p>
+              {Object.keys(decisionIntent.approval.payload).length > 0 && (
+                <dl className="approval-details dialog-details">
+                  {Object.entries(decisionIntent.approval.payload).map(
+                    ([field, value]) => (
+                      <div key={field}>
+                        <dt>{approvalFieldLabel(field)}</dt>
+                        <dd>{approvalFieldValue(field, value)}</dd>
+                      </div>
+                    ),
+                  )}
+                </dl>
+              )}
+              <label>
+                Escribe la referencia exacta para confirmar
+                <input
+                  ref={decisionInputRef}
+                  value={decisionConfirmation}
+                  onChange={(event) =>
+                    setDecisionConfirmation(event.target.value)
+                  }
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </label>
+              <small className="muted-text">
+                Referencia a escribir:{" "}
+                <code>{decisionIntent.approval.target_key}</code>
+              </small>
+              {decisionIntent.decision === "reject" && (
+                <label>
+                  Motivo del rechazo
+                  <textarea
+                    value={rejectionReason}
+                    onChange={(event) => setRejectionReason(event.target.value)}
+                    minLength={5}
+                    maxLength={1_000}
+                    rows={3}
+                    required
+                  />
+                </label>
+              )}
+              {decisionError && (
+                <div className="alert error" role="alert">
+                  {decisionError}
+                </div>
+              )}
+              <div className="dialog-actions">
+                <button
+                  type="button"
+                  className={
+                    decisionIntent.decision === "approve"
+                      ? "success-button"
+                      : "danger-button"
+                  }
+                  disabled={
+                    deciding ||
+                    decisionConfirmation.trim() !==
+                      decisionIntent.approval.target_key ||
+                    (decisionIntent.decision === "reject" &&
+                      rejectionReason.trim().length < 5)
+                  }
+                  onClick={() => void decide()}
+                >
+                  {deciding
+                    ? "Guardando…"
+                    : decisionIntent.decision === "approve"
+                      ? "Confirmar aprobación"
+                      : "Confirmar rechazo"}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={deciding}
+                  onClick={closeDecision}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </section>
           </div>
         )}
       </main>
+
+      {onboardingOpen && (
+        <OnboardingOverlay
+          onAskExample={(question) => chatRef.current?.send(question)}
+          onFinish={() => {
+            completeOnboarding();
+            setGuidedMode("done");
+            setOnboardingOpen(false);
+          }}
+          onContinueGuided={() => setOnboardingOpen(false)}
+        />
+      )}
     </div>
   );
 }
