@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import ipaddress
 import json
 import os
 import subprocess
@@ -11,6 +12,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 def read_env(path: Path) -> dict[str, str]:
@@ -62,6 +64,23 @@ def api_request(method: str, url: str, token: str, payload: dict | None = None) 
         raise RuntimeError(f"Chatwoot devolvió HTTP {exc.code}: {detail}") from exc
 
 
+def require_public_https(url: str, label: str) -> None:
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise RuntimeError(f"{label} debe ser una URL HTTPS pública sin credenciales")
+    host = parsed.hostname.lower()
+    if host in {"localhost", "127.0.0.1", "::1"} or host.endswith((".localhost", ".local", ".invalid")):
+        raise RuntimeError(f"{label} no puede apuntar a loopback o dominios locales")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if "." not in host:
+            raise RuntimeError(f"{label} no contiene un hostname público") from None
+    else:
+        if not address.is_global:
+            raise RuntimeError(f"{label} no puede apuntar a una IP privada/reservada")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("client_id")
@@ -86,6 +105,11 @@ def main() -> int:
     if not base_url:
         parser.error("Indica --base-url o CHATWOOT_PUBLIC_URL")
     webhook_url = args.webhook_url or f"https://{env.get('API_HOST', 'api.localhost')}/webhooks/chatwoot"
+    if env.get("ENVIRONMENT", "").lower() in {"production", "staging"}:
+        if env.get("CHATWOOT_SAFE_FETCH_ALLOW_PRIVATE_NETWORK", "false").lower() in {"1", "true", "yes", "on"}:
+            raise RuntimeError("CHATWOOT_SAFE_FETCH_ALLOW_PRIVATE_NETWORK debe permanecer false")
+        require_public_https(base_url, "CHATWOOT_PUBLIC_URL")
+        require_public_https(webhook_url, "BRIDGE_WEBHOOK_URL")
 
     collection_url = f"{base_url}/api/v1/accounts/{account_id}/webhooks"
     current = api_request("GET", collection_url, token)
@@ -112,6 +136,7 @@ def main() -> int:
         env_path,
         {
             "CHATWOOT_API_TOKEN": token,
+            "CHATWOOT_ENABLED": "true",
             "CHATWOOT_ACCOUNT_ID": str(account_id),
             "CHATWOOT_WEBHOOK_SECRET": str(webhook["secret"]),
             "BRIDGE_WEBHOOK_URL": webhook_url,
@@ -133,4 +158,4 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from exc

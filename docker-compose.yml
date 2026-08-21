@@ -12,18 +12,28 @@ x-security: &default-security
   cap_drop:
     - ALL
 
+# External runtime images are pinned to immutable repository digests. Operators
+# may override them only with another tag@sha256 value after validation.
+x-images:
+  nginx: &nginx-image ${NGINX_IMAGE:-nginx:1.30.4-alpine3.24@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46}
+  redis: &redis-image ${REDIS_IMAGE:-redis:7.2.14-alpine3.21@sha256:dfa18828cbc07b3ae6a95ec7343f6c214fdee2d836197b4be8e9904420762cd8}
+  bridge-postgres: &bridge-postgres-image ${BRIDGE_POSTGRES_IMAGE:-pgvector/pgvector:pg15@sha256:a20a57d7aa5217a6af0a391ccf69f4a8512406d6c14be08132f801468cc3cc62}
+  chatwoot-postgres: &chatwoot-postgres-image ${CHATWOOT_POSTGRES_IMAGE:-pgvector/pgvector:pg16@sha256:00ba258a66dac104fd5171074a0084462a64a1369d8513f3d0a634e2f24d15bc}
+  activepieces-postgres: &activepieces-postgres-image ${ACTIVEPIECES_POSTGRES_IMAGE:-pgvector/pgvector:0.8.0-pg14@sha256:c55d7e7deac05dde62139e0ded4fcf4f58363656cbc382dbea82fbed995aa767}
+  activepieces: &activepieces-image ${ACTIVEPIECES_IMAGE:-ghcr.io/activepieces/activepieces:0.86.3@sha256:208517c4f0d798a477a0c594bf432dd0f4918433f4b6f5b5f188a6e10e638c6c}
+
 x-activepieces-environment: &activepieces-environment
   AP_ENVIRONMENT: prod
-  AP_ENCRYPTION_KEY: ${ACTIVEPIECES_ENCRYPTION_KEY}
-  AP_JWT_SECRET: ${ACTIVEPIECES_JWT_SECRET}
+  AP_ENCRYPTION_KEY: ${ACTIVEPIECES_ENCRYPTION_KEY:-}
+  AP_JWT_SECRET: ${ACTIVEPIECES_JWT_SECRET:-}
   AP_POSTGRES_HOST: activepieces-db
   AP_POSTGRES_PORT: 5432
   AP_POSTGRES_DATABASE: ${ACTIVEPIECES_POSTGRES_DB:-activepieces}
   AP_POSTGRES_USERNAME: ${ACTIVEPIECES_POSTGRES_USER:-activepieces}
-  AP_POSTGRES_PASSWORD: ${ACTIVEPIECES_POSTGRES_PASSWORD}
+  AP_POSTGRES_PASSWORD: ${ACTIVEPIECES_POSTGRES_PASSWORD:-}
   AP_REDIS_HOST: activepieces-redis
   AP_REDIS_PORT: 6379
-  AP_REDIS_PASSWORD: ${ACTIVEPIECES_REDIS_PASSWORD}
+  AP_REDIS_PASSWORD: ${ACTIVEPIECES_REDIS_PASSWORD:-}
 
 networks:
   public:
@@ -45,14 +55,18 @@ volumes:
   activepieces_redis_data:
   activepieces_cache:
   bridge_uploads:
+  bridge_automation_email:
 
 services:
   reverse-proxy:
-    profiles: ["core", "full"]
-    image: nginx:1.25-alpine
+    profiles: ["core", "full", "production"]
+    image: *nginx-image
+    user: "101:101"
+    init: true
     restart: unless-stopped
+    stop_grace_period: 30s
     ports:
-      - "${PROXY_PORT:-9000}:8080"
+      - "${PROXY_BIND_ADDRESS:-127.0.0.1}:${PROXY_PORT:-9000}:8080"
     environment:
       PORTAL_HOST: ${PORTAL_HOST:-localhost}
       API_HOST: ${API_HOST:-api.localhost}
@@ -68,19 +82,19 @@ services:
       bridge-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/healthz || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/readyz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 20s
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
+      - /var/cache/nginx:uid=101,gid=101,mode=0755
+      - /var/run:uid=101,gid=101,mode=0755
+      - /tmp:uid=101,gid=101,mode=1777
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
-    cap_add:
-      - CHOWN
-      - SETGID
-      - SETUID
-    cap_drop:
-      - ALL
+    <<: *default-security
     deploy:
       resources:
         limits:
@@ -89,11 +103,18 @@ services:
           pids: 64
 
   portal:
-    profiles: ["core", "full"]
+    profiles: ["core", "full", "production"]
     build:
       context: ./portal
       dockerfile: Dockerfile
+      args:
+        RELEASE_VERSION: ${RELEASE_VERSION:-dev}
+        SOURCE_COMMIT: ${SOURCE_COMMIT:-unknown}
+    image: ${PORTAL_IMAGE:-agent-platform-portal:${RELEASE_VERSION:-dev}}
+    user: "101:101"
+    init: true
     restart: unless-stopped
+    stop_grace_period: 30s
     expose: ["8080"]
     networks: [internal]
     healthcheck:
@@ -101,6 +122,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 15s
     read_only: true
     tmpfs:
       - /var/run
@@ -108,12 +130,7 @@ services:
       - /tmp
       - /etc/nginx/conf.d
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
-    cap_add:
-      - SETGID
-    cap_drop:
-      - ALL
+    <<: *default-security
     deploy:
       resources:
         limits:
@@ -122,13 +139,14 @@ services:
           pids: 64
 
   bridge-db:
-    profiles: ["core", "full"]
-    image: pgvector/pgvector:pg15
+    profiles: ["core", "full", "production"]
+    image: *bridge-postgres-image
     restart: unless-stopped
+    stop_grace_period: 60s
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-bridge_db}
       POSTGRES_USER: ${POSTGRES_USER:-bridge_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD}
     volumes:
       - bridge_db_data:/var/lib/postgresql/data
     networks: [data]
@@ -137,9 +155,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 20s
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    <<: *default-security
+    # Official Postgres starts as root only to own a fresh volume, then drops
+    # permanently to postgres before accepting connections.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     deploy:
       resources:
         limits:
@@ -148,23 +169,26 @@ services:
           pids: 128
 
   bridge-redis:
-    profiles: ["core", "full"]
-    image: redis:7-alpine
+    profiles: ["core", "full", "production"]
+    image: *redis-image
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    stop_grace_period: 30s
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--requirepass", "${REDIS_PASSWORD:?Define REDIS_PASSWORD}"]
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Define REDIS_PASSWORD}
     volumes:
       - bridge_redis_data:/data
     networks: [data]
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"${REDIS_PASSWORD}\" ping | grep PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 10s
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    <<: *default-security
+    # Official Redis performs the same one-time fresh-volume ownership drop.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     deploy:
       resources:
         limits:
@@ -173,26 +197,56 @@ services:
           pids: 64
 
   bridge-api:
-    profiles: ["core", "full"]
+    profiles: ["core", "full", "production"]
     build:
       context: ./bridge-api
       dockerfile: Dockerfile
+      args:
+        RELEASE_VERSION: ${RELEASE_VERSION:-dev}
+        SOURCE_COMMIT: ${SOURCE_COMMIT:-unknown}
+    image: ${BRIDGE_API_IMAGE:-agent-platform-bridge-api:${RELEASE_VERSION:-dev}}
+    init: true
     restart: unless-stopped
+    stop_grace_period: 60s
     expose: ["8005"]
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-production}
-      INSTALLATION_ID: ${INSTALLATION_ID:-local}
+      APP_VERSION: ${RELEASE_VERSION:-0.9.1-dev}
+      RELEASE_VERSION: ${RELEASE_VERSION:-0.9.1-dev}
+      INSTALLATION_ID: ${INSTALLATION_ID:?Define INSTALLATION_ID}
       AUTO_CREATE_SCHEMA: "false"
       ALLOW_DEMO_DATA: ${ALLOW_DEMO_DATA:-false}
       AUTO_SEED_DEMO_DATA: ${AUTO_SEED_DEMO_DATA:-false}
-      RUN_MIGRATIONS: "true"
-      PILOT_MODE: ${PILOT_MODE:-true}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-bridge_user}:${POSTGRES_PASSWORD}@bridge-db:5432/${POSTGRES_DB:-bridge_db}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@bridge-redis:6379/0
-      AUTH_SECRET: ${AUTH_SECRET}
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
+      PILOT_MODE: ${PILOT_MODE:-false}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-bridge_user}:${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD}@bridge-db:5432/${POSTGRES_DB:-bridge_db}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?Define REDIS_PASSWORD}@bridge-redis:6379/0
+      REDIS_ENABLED: ${REDIS_ENABLED:-true}
+      RATE_LIMIT_BACKEND: ${RATE_LIMIT_BACKEND:-redis}
+      REDIS_RATE_LIMIT_FAIL_OPEN: ${REDIS_RATE_LIMIT_FAIL_OPEN:-false}
+      REDIS_SOCKET_TIMEOUT_SEC: ${REDIS_SOCKET_TIMEOUT_SEC:-0.5}
+      REDIS_CONNECT_TIMEOUT_SEC: ${REDIS_CONNECT_TIMEOUT_SEC:-0.5}
+      OUTBOX_WORKER_ENABLED: ${OUTBOX_WORKER_ENABLED:-true}
+      WEBHOOK_OUTBOUND_ALLOWED_HOSTS: ${WEBHOOK_OUTBOUND_ALLOWED_HOSTS:-}
+      EMAIL_TRACKING_BASE_URL: ${EMAIL_TRACKING_BASE_URL:-}
+      OWNER_COMMAND_EMAIL: ${OWNER_COMMAND_EMAIL:-}
+      OWNER_COMMAND_PHONE: ${OWNER_COMMAND_PHONE:-}
+      OWNER_COMMAND_EMAIL_WEBHOOK_SECRET: ${OWNER_COMMAND_EMAIL_WEBHOOK_SECRET:-}
+      OUTBOX_WORKER_POLL_SEC: ${OUTBOX_WORKER_POLL_SEC:-1.0}
+      OUTBOX_WORKER_LEASE_SEC: ${OUTBOX_WORKER_LEASE_SEC:-60}
+      OUTBOX_WORKER_DISPATCH_LOCK_SEC: ${OUTBOX_WORKER_DISPATCH_LOCK_SEC:-30}
+      OUTBOX_MAX_ATTEMPTS: ${OUTBOX_MAX_ATTEMPTS:-8}
+      OUTBOX_RETRY_BASE_DELAY_SEC: ${OUTBOX_RETRY_BASE_DELAY_SEC:-1.0}
+      OUTBOX_RETRY_MAX_DELAY_SEC: ${OUTBOX_RETRY_MAX_DELAY_SEC:-300.0}
+      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-16}
+      SCHEDULED_TASK_WORKER_ENABLED: ${SCHEDULED_TASK_WORKER_ENABLED:-true}
+      SCHEDULED_TASK_WORKER_POLL_SEC: ${SCHEDULED_TASK_WORKER_POLL_SEC:-30.0}
+      ACTIVITY_REMINDER_WORKER_ENABLED: ${ACTIVITY_REMINDER_WORKER_ENABLED:-false}
+      ACTIVITY_REMINDER_WORKER_POLL_SEC: ${ACTIVITY_REMINDER_WORKER_POLL_SEC:-30.0}
+      AUTH_SECRET: ${AUTH_SECRET:?Define AUTH_SECRET}
       AUTH_TOKEN_TTL_SEC: ${AUTH_TOKEN_TTL_SEC:-3600}
       INITIAL_ADMIN_USERNAME: ${INITIAL_ADMIN_USERNAME:-admin}
-      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Define INITIAL_ADMIN_PASSWORD}
       QUOTE_CONFIRMATION_TTL_SEC: ${QUOTE_CONFIRMATION_TTL_SEC:-1800}
       STOCK_RESERVATION_TTL_SEC: ${STOCK_RESERVATION_TTL_SEC:-900}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:9000}
@@ -201,9 +255,12 @@ services:
       RATE_LIMIT_REQUESTS_PER_MINUTE: ${RATE_LIMIT_REQUESTS_PER_MINUTE:-120}
       LOGIN_RATE_LIMIT_REQUESTS: ${LOGIN_RATE_LIMIT_REQUESTS:-8}
       LOGIN_RATE_LIMIT_WINDOW_SEC: ${LOGIN_RATE_LIMIT_WINDOW_SEC:-900}
+      TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      CHATWOOT_ENABLED: ${CHATWOOT_ENABLED:-false}
       CHATWOOT_BASE_URL: http://chatwoot-web:3000
       CHATWOOT_API_TOKEN: ${CHATWOOT_API_TOKEN:-}
-      CHATWOOT_WEBHOOK_SECRET: ${CHATWOOT_WEBHOOK_SECRET}
+      CHATWOOT_WEBHOOK_SECRET: ${CHATWOOT_WEBHOOK_SECRET:-}
       CHATWOOT_HANDOFF_TEAM_ID: ${CHATWOOT_HANDOFF_TEAM_ID:-0}
       CHATWOOT_HANDOFF_ASSIGNEE_ID: ${CHATWOOT_HANDOFF_ASSIGNEE_ID:-0}
       FLOWWINK_BASE_URL: http://flowwink-app:80
@@ -214,6 +271,8 @@ services:
       INTEGRATION_RETRY_MAX_DELAY_SEC: ${INTEGRATION_RETRY_MAX_DELAY_SEC:-2.0}
       IDEMPOTENCY_LEASE_SEC: ${IDEMPOTENCY_LEASE_SEC:-300}
       IDEMPOTENCY_MAX_ATTEMPTS: ${IDEMPOTENCY_MAX_ATTEMPTS:-8}
+      CIRCUIT_BREAKER_FAILURE_THRESHOLD: ${CIRCUIT_BREAKER_FAILURE_THRESHOLD:-5}
+      CIRCUIT_BREAKER_RECOVERY_SEC: ${CIRCUIT_BREAKER_RECOVERY_SEC:-30}
       LLM_PRICING_CATALOG_JSON: ${LLM_PRICING_CATALOG_JSON:-}
       LLM_MAX_DAILY_COST_USD: ${LLM_MAX_DAILY_COST_USD:-25}
       LLM_MAX_INPUT_BYTES: ${LLM_MAX_INPUT_BYTES:-131072}
@@ -234,13 +293,17 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       STANDARD_LLM_PROVIDER: ${STANDARD_LLM_PROVIDER:-ollama}
       STANDARD_LLM_MODEL: ${STANDARD_LLM_MODEL:-qwen2.5:7b}
+      COMMERCE_ASSISTANT_NAME: ${COMMERCE_ASSISTANT_NAME:-Asistente de la tienda}
+      COMMERCE_STORE_NAME: ${COMMERCE_STORE_NAME:-}
       CHEAP_LLM_PROVIDER: ${CHEAP_LLM_PROVIDER:-ollama}
       CHEAP_LLM_MODEL: ${CHEAP_LLM_MODEL:-qwen2.5:3b}
       ADVANCED_LLM_PROVIDER: ${ADVANCED_LLM_PROVIDER:-openai}
       ADVANCED_LLM_MODEL: ${ADVANCED_LLM_MODEL:-}
       CRITICAL_LLM_PROVIDER: ${CRITICAL_LLM_PROVIDER:-anthropic}
       CRITICAL_LLM_MODEL: ${CRITICAL_LLM_MODEL:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com/v1}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
@@ -251,6 +314,8 @@ services:
       RAG_MAX_FILE_MB: ${RAG_MAX_FILE_MB:-25}
       RAG_UPLOAD_DIR: /data/uploads
       RAG_ALLOWED_ROOTS: /data/uploads
+      AUTOMATION_EMAIL_DIR: /data/emails
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-local}
       OCR_ENABLED: ${OCR_ENABLED:-true}
       COUNTRY: ${COUNTRY:-ES}
       CURRENCY: ${CURRENCY:-EUR}
@@ -262,6 +327,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - bridge_uploads:/data/uploads
+      - bridge_automation_email:/data/emails
     # `public` da egress para integraciones externas reales (PrestaShop/GHL).
     # En producción el egress debe ir por un proxy con allowlist (D-006); quita
     # `public` si no necesitas integraciones externas.
@@ -276,6 +342,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 5
+      start_period: 45s
     read_only: true
     tmpfs: [/tmp]
     logging: *default-logging
@@ -288,7 +355,7 @@ services:
           pids: 128
 
   flowwink-app:
-    profiles: ["core", "full"]
+    profiles: ["full"]
     build:
       context: ./vendor/flowwink
       dockerfile: Dockerfile
@@ -296,7 +363,10 @@ services:
         VITE_SUPABASE_URL: ${FLOWWINK_SUPABASE_URL:-}
         VITE_SUPABASE_PUBLISHABLE_KEY: ${FLOWWINK_SUPABASE_ANON_KEY:-}
         VITE_SUPABASE_PROJECT_ID: ${FLOWWINK_SUPABASE_PROJECT_ID:-}
+    image: ${FLOWWINK_IMAGE:-agent-platform-flowwink:${FLOWWINK_BUILD_TAG:-0cd4e9b8}}
+    init: true
     restart: unless-stopped
+    stop_grace_period: 30s
     expose: ["80"]
     environment:
       VITE_SUPABASE_URL: ${FLOWWINK_SUPABASE_URL:-}
@@ -308,18 +378,33 @@ services:
       interval: 20s
       timeout: 5s
       retries: 5
+      start_period: 15s
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+          pids: 64
 
   chatwoot-db:
     profiles: ["full"]
-    image: pgvector/pgvector:pg16
+    image: *chatwoot-postgres-image
     restart: unless-stopped
+    stop_grace_period: 60s
     environment:
       POSTGRES_DB: ${CHATWOOT_POSTGRES_DB:-chatwoot_db}
       POSTGRES_USER: ${CHATWOOT_POSTGRES_USER:-chatwoot}
-      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:-}
     volumes:
       - chatwoot_db_data:/var/lib/postgresql/data
     networks: [data]
@@ -328,28 +413,43 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 20s
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    <<: *default-security
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 768M
+          pids: 128
 
   chatwoot-redis:
     profiles: ["full"]
-    image: redis:7-alpine
+    image: *redis-image
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${CHATWOOT_REDIS_PASSWORD}"]
+    stop_grace_period: 30s
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--requirepass", "${CHATWOOT_REDIS_PASSWORD:-}"]
     environment:
-      CHATWOOT_REDIS_PASSWORD: ${CHATWOOT_REDIS_PASSWORD}
+      CHATWOOT_REDIS_PASSWORD: ${CHATWOOT_REDIS_PASSWORD:-}
     volumes:
       - chatwoot_redis_data:/data
     networks: [data]
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"${CHATWOOT_REDIS_PASSWORD}\" ping | grep PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${CHATWOOT_REDIS_PASSWORD}\" redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 10s
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    <<: *default-security
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+          pids: 64
 
   chatwoot-web:
     profiles: ["full"]
@@ -357,7 +457,9 @@ services:
       context: ./vendor/chatwoot
       dockerfile: docker/Dockerfile
     image: ${COMPOSE_PROJECT_NAME:-agent-platform}-chatwoot:${CHATWOOT_BUILD_TAG:-b05f22da}
+    init: true
     restart: unless-stopped
+    stop_grace_period: 90s
     expose: ["3000"]
     environment: &chatwoot-environment
       NODE_ENV: production
@@ -373,13 +475,13 @@ services:
       # true, por lo que mantenerlo en "false" por defecto es la postura
       # segura exigida por la auditoría 2026-08-10.
       SAFE_FETCH_ALLOW_PRIVATE_NETWORK: ${CHATWOOT_SAFE_FETCH_ALLOW_PRIVATE_NETWORK:-false}
-      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE}
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:-}
       POSTGRES_HOST: chatwoot-db
       POSTGRES_PORT: 5432
       POSTGRES_DATABASE: ${CHATWOOT_POSTGRES_DB:-chatwoot_db}
       POSTGRES_USERNAME: ${CHATWOOT_POSTGRES_USER:-chatwoot}
-      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD}
-      REDIS_URL: redis://:${CHATWOOT_REDIS_PASSWORD}@chatwoot-redis:6379/0
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:-}
+      REDIS_URL: redis://:${CHATWOOT_REDIS_PASSWORD:-}@chatwoot-redis:6379/0
       FRONTEND_URL: ${CHATWOOT_PUBLIC_URL:-http://localhost:9000/chatwoot}
       RAILS_LOG_TO_STDOUT: "true"
     volumes:
@@ -396,14 +498,22 @@ services:
       interval: 20s
       timeout: 8s
       retries: 10
+      start_period: 120s
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    <<: *default-security
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1536M
+          pids: 256
 
   chatwoot-worker:
     profiles: ["full"]
     image: ${COMPOSE_PROJECT_NAME:-agent-platform}-chatwoot:${CHATWOOT_BUILD_TAG:-b05f22da}
+    init: true
     restart: unless-stopped
+    stop_grace_period: 120s
     environment: *chatwoot-environment
     volumes:
       - chatwoot_storage_data:/app/storage
@@ -417,18 +527,25 @@ services:
       interval: 30s
       timeout: 15s
       retries: 5
+      start_period: 60s
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    <<: *default-security
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1536M
+          pids: 256
 
   activepieces-db:
     profiles: ["full"]
-    image: pgvector/pgvector:0.8.0-pg14
+    image: *activepieces-postgres-image
     restart: unless-stopped
+    stop_grace_period: 60s
     environment:
       POSTGRES_DB: ${ACTIVEPIECES_POSTGRES_DB:-activepieces}
       POSTGRES_USER: ${ACTIVEPIECES_POSTGRES_USER:-activepieces}
-      POSTGRES_PASSWORD: ${ACTIVEPIECES_POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${ACTIVEPIECES_POSTGRES_PASSWORD:-}
     volumes:
       - activepieces_db_data:/var/lib/postgresql/data
     networks: [data]
@@ -437,33 +554,50 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 20s
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    <<: *default-security
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 768M
+          pids: 128
 
   activepieces-redis:
     profiles: ["full"]
-    image: redis:7-alpine
+    image: *redis-image
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${ACTIVEPIECES_REDIS_PASSWORD}"]
+    stop_grace_period: 30s
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--requirepass", "${ACTIVEPIECES_REDIS_PASSWORD:-}"]
     environment:
-      ACTIVEPIECES_REDIS_PASSWORD: ${ACTIVEPIECES_REDIS_PASSWORD}
+      ACTIVEPIECES_REDIS_PASSWORD: ${ACTIVEPIECES_REDIS_PASSWORD:-}
     volumes:
       - activepieces_redis_data:/data
     networks: [data]
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"${ACTIVEPIECES_REDIS_PASSWORD}\" ping | grep PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${ACTIVEPIECES_REDIS_PASSWORD}\" redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 10s
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    <<: *default-security
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+          pids: 64
 
   activepieces-app:
     profiles: ["full"]
-    image: ghcr.io/activepieces/activepieces:0.86.3
+    image: *activepieces-image
+    init: true
     restart: unless-stopped
+    stop_grace_period: 90s
     expose: ["80"]
     volumes:
       - activepieces_cache:/usr/src/app/cache
@@ -482,14 +616,22 @@ services:
       interval: 20s
       timeout: 8s
       retries: 10
+      start_period: 60s
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    <<: *default-security
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1536M
+          pids: 256
 
   activepieces-worker:
     profiles: ["full"]
-    image: ghcr.io/activepieces/activepieces:0.86.3
+    image: *activepieces-image
+    init: true
     restart: unless-stopped
+    stop_grace_period: 120s
     environment:
       <<: *activepieces-environment
       AP_CONTAINER_TYPE: WORKER
@@ -505,6 +647,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 60s
     logging: *default-logging
-    security_opt:
-      - no-new-privileges:true
+    <<: *default-security
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 2048M
+          pids: 256

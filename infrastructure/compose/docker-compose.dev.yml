@@ -1,7 +1,8 @@
-version: '3.8'
-
 services:
   bridge-api:
+    profiles: ["development"]
     environment:
-      - ENVIRONMENT=development
-      - LOG_LEVEL=debug
+      ENVIRONMENT: development
+      LOG_LEVEL: debug
+      PILOT_MODE: "true"
+      REDIS_RATE_LIMIT_FAIL_OPEN: "true"

@@ -1,9 +1,13 @@
-version: '3.8'
-
 services:
   local-llm:
-    image: ollama/ollama:latest
-    container_name: local-llm-gpu
+    # No default mutable tag: select and record an immutable digest explicitly.
+    image: ${OLLAMA_IMAGE:?Define OLLAMA_IMAGE as ollama/ollama@sha256:<digest>}
+    profiles: ["development", "gpu"]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     deploy:
       resources:
         reservations:

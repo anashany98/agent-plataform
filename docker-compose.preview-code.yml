@@ -1,0 +1,17 @@
+# Preview-only override (UNTACKED, do not commit): runs the CURRENT bridge-api
+# source from this checkout inside the candidate preview container without
+# rebuilding the image (the image build is broken on this machine, see run.md).
+#
+# Mounts bridge-api/app and bridge-api/alembic as read-only bind mounts over the
+# image copies, keeping read_only: true intact. The entrypoint still runs
+# `alembic upgrade head` on start, so pending migrations (e.g. 0026) apply.
+#
+# Usage:
+#   docker compose --env-file .env.candidate-0815 -f docker-compose.yml \
+#     -f docker-compose.preview.yml -f docker-compose.preview-code.yml \
+#     up -d --force-recreate bridge-api
+services:
+  bridge-api:
+    volumes:
+      - C:/Users/Usuario/Desktop/Agent/agent-plataform/bridge-api/app:/app/app:ro
+      - C:/Users/Usuario/Desktop/Agent/agent-plataform/bridge-api/alembic:/app/alembic:ro

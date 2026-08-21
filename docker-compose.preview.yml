@@ -1,0 +1,17 @@
+# Preview-only override: publishes bridge-api's 8005 and chatwoot-web's 3000
+# to the host so the browser can reach them via loopback URLs.
+# chatwoot-web only joins internal networks by default; Docker Desktop does not
+# publish ports from internal-only networks, so the public network is added.
+# FRONTEND_URL is overridden without hard-coding a public tunnel. This file is
+# safe to version, but must never be combined with profile production.
+services:
+  bridge-api:
+    ports:
+      - "${PREVIEW_BIND_ADDRESS:-127.0.0.1}:${PREVIEW_API_PORT:-8005}:8005"
+  chatwoot-web:
+    networks:
+      - public
+    ports:
+      - "${PREVIEW_BIND_ADDRESS:-127.0.0.1}:${PREVIEW_CHATWOOT_PORT:-3003}:3000"
+    environment:
+      FRONTEND_URL: ${CHATWOOT_PREVIEW_URL:-http://127.0.0.1:3003}

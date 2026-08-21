@@ -1,8 +1,90 @@
-version: '3.8'
+# Production edge override. Use together with the base file:
+# docker compose -f docker-compose.yml \
+#   -f infrastructure/compose/docker-compose.prod.example.yml \
+#   --env-file .env.<client> --profile production config
+
+secrets:
+  tls_certificate:
+    file: ${TLS_CERT_FILE:?Define TLS_CERT_FILE with the PEM certificate path}
+  tls_private_key:
+    file: ${TLS_PRIVATE_KEY_FILE:?Define TLS_PRIVATE_KEY_FILE with the PEM private-key path}
 
 services:
+  # In production the routing proxy is never published directly. Only the TLS
+  # edge below can reach it through the project-scoped Docker network.
   reverse-proxy:
-    ports:
-      - "443:443"
+    ports: !override []
+
+  # Production core has no unrestricted default route. External providers are
+  # enabled only after an explicit egress proxy/allowlist is supplied.
+  bridge-api:
+    networks: !override [internal, data]
+    extra_hosts: !reset []
     environment:
-      - ENABLE_SSL=true
+      CHEAP_LLM_PROVIDER: none
+      CHEAP_LLM_MODEL: ""
+      STANDARD_LLM_PROVIDER: none
+      STANDARD_LLM_MODEL: ""
+      ADVANCED_LLM_PROVIDER: none
+      ADVANCED_LLM_MODEL: ""
+      CRITICAL_LLM_PROVIDER: none
+      CRITICAL_LLM_MODEL: ""
+      OLLAMA_BASE_URL: ""
+      OPENAI_BASE_URL: ""
+      ANTHROPIC_BASE_URL: ""
+      EMBEDDING_PROVIDER: local_tfidf
+      EMBEDDING_MODEL: local-tfidf
+      EMBEDDING_BASE_URL: ""
+      TRUSTED_PROXY_COUNT: "2"
+      TRUSTED_PROXY_CIDRS: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      EMAIL_PROVIDER: local
+
+  tls-proxy:
+    profiles: ["production"]
+    image: ${NGINX_IMAGE:-nginx:1.30.4-alpine3.24@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46}
+    user: "101:101"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "${TLS_BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:8080"
+      - "${TLS_BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:8443"
+    environment:
+      PORTAL_HOST: ${PORTAL_HOST:?Define PORTAL_HOST}
+      API_HOST: ${API_HOST:?Define API_HOST}
+    secrets:
+      - tls_certificate
+      - tls_private_key
+    volumes:
+      - ./infrastructure/proxy/tls-terminator.conf.template:/etc/nginx/templates/default.conf.template:ro
+    networks: [public]
+    depends_on:
+      reverse-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/healthz && wget -q --no-check-certificate --header=\"Host: $${PORTAL_HOST}\" -O - https://127.0.0.1:8443/readyz || exit 1"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
+      - /var/cache/nginx:uid=101,gid=101,mode=0755
+      - /var/run:uid=101,gid=101,mode=0755
+      - /tmp:uid=101,gid=101,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 128M
+          pids: 64
