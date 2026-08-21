@@ -28,17 +28,28 @@ import datetime
 import hashlib
 import json
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from app.database import Base
 from sqlalchemy import DateTime, Numeric, create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.database import Base
 
-# Coincide con la revisión de migración más reciente (0007). Si el esquema
-# cambia, bump de esta constante para invalidar restores incompatibles.
-SCHEMA_VERSION = "0008"
+def _alembic_schema_version() -> str:
+    bridge_root = Path(__file__).resolve().parents[2]
+    config = Config(str(bridge_root / "alembic.ini"))
+    config.set_main_option("script_location", str(bridge_root / "alembic"))
+    heads = ScriptDirectory.from_config(config).get_heads()
+    if len(heads) != 1:
+        raise RuntimeError(f"El grafo Alembic debe tener un único head; encontrados: {heads}")
+    return str(heads[0])
+
+
+SCHEMA_VERSION = _alembic_schema_version()
 SCHEMA_VERSION_KEY = "schema_version"
 
 # Tabla efímera usada como marker de "destino preparado para restore".

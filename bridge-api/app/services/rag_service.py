@@ -5,9 +5,12 @@ import mimetypes
 import re
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
+from app.config import settings
+from app.models.models import RAGChunk, RAGDocument
+from app.services import rag_security
 from bs4 import BeautifulSoup
 from docx import Document as DocxDocument
 from openpyxl import load_workbook
@@ -17,13 +20,48 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize
 from sqlalchemy.orm import Session
 
-from app.config import settings
-from app.models.models import RAGChunk, RAGDocument
-from app.services import rag_security
-
 
 class RAGError(ValueError):
     pass
+
+
+async def embed_texts(texts: list[str]) -> list[list[float]]:
+    """Genera embeddings para una lista de textos con el proveedor
+    configurado (ollama / openai / openai_compatible).
+
+    Función a nivel de módulo para que la reutilicen el RAG de documentos
+    y la búsqueda semántica de productos con el mismo proveedor, modelo,
+    validación de dimensión y gestión de errores.
+    """
+
+    provider = settings.EMBEDDING_PROVIDER.lower()
+    try:
+        if provider == "ollama":
+            vectors = []
+            async with httpx.AsyncClient(timeout=60) as client:
+                for text in texts:
+                    response = await client.post(
+                        f"{settings.EMBEDDING_BASE_URL.rstrip('/')}/api/embeddings",
+                        json={"model": settings.EMBEDDING_MODEL, "prompt": text},
+                    )
+                    response.raise_for_status()
+                    vectors.append(response.json().get("embedding"))
+            return RAGService._validate_vectors(vectors, len(texts))
+        if provider in {"openai", "openai_compatible"}:
+            if not settings.EMBEDDING_API_KEY:
+                raise RAGError("Falta la credencial del proveedor de embeddings")
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(
+                    RAGService._embedding_endpoint(),
+                    headers={"Authorization": f"Bearer {settings.EMBEDDING_API_KEY}"},
+                    json={"model": settings.EMBEDDING_MODEL, "input": texts},
+                )
+                response.raise_for_status()
+                data = response.json().get("data") or []
+            return RAGService._validate_vectors([item.get("embedding") for item in data], len(texts))
+    except httpx.HTTPError as exc:
+        raise RAGError(f"El proveedor de embeddings no está disponible: {exc}") from exc
+    raise RAGError(f"Proveedor de embeddings no soportado: {provider}")
 
 
 class RAGService:
@@ -33,7 +71,7 @@ class RAGService:
         self.db = db
 
     @staticmethod
-    def _safe_roots() -> List[Path]:
+    def _safe_roots() -> list[Path]:
         roots = []
         for root in settings.rag_allowed_roots:
             roots.append(Path(root).expanduser().resolve())
@@ -180,7 +218,7 @@ class RAGService:
             raise RAGError(f"La imagen está corrupta o no se puede procesar: {exc}") from exc
 
     @staticmethod
-    def chunk_text(text: str, chunk_size: int = 240, overlap: int = 40) -> List[str]:
+    def chunk_text(text: str, chunk_size: int = 240, overlap: int = 40) -> list[str]:
         clean = re.sub(r"\s+", " ", text).strip()
         if not clean:
             raise RAGError("El documento no contiene texto utilizable")
@@ -201,7 +239,7 @@ class RAGService:
         return f"{base}/embeddings" if base.endswith("/v1") else f"{base}/v1/embeddings"
 
     @staticmethod
-    def _validate_vectors(vectors: List[List[float]], expected_count: int) -> List[List[float]]:
+    def _validate_vectors(vectors: list[list[float]], expected_count: int) -> list[list[float]]:
         if len(vectors) != expected_count:
             raise RAGError("Número de embeddings inesperado")
         normalized: list[list[float]] = []
@@ -213,41 +251,30 @@ class RAGService:
             normalized.append([float(value) for value in vector])
         return normalized
 
-    async def _remote_embeddings(self, texts: List[str]) -> List[List[float]]:
-        provider = settings.EMBEDDING_PROVIDER.lower()
-        try:
-            if provider == "ollama":
-                vectors = []
-                async with httpx.AsyncClient(timeout=60) as client:
-                    for text in texts:
-                        response = await client.post(
-                            f"{settings.EMBEDDING_BASE_URL.rstrip('/')}/api/embeddings",
-                            json={"model": settings.EMBEDDING_MODEL, "prompt": text},
-                        )
-                        response.raise_for_status()
-                        vectors.append(response.json().get("embedding"))
-                return self._validate_vectors(vectors, len(texts))
-            if provider in {"openai", "openai_compatible"}:
-                if not settings.EMBEDDING_API_KEY:
-                    raise RAGError("Falta la credencial del proveedor de embeddings")
-                async with httpx.AsyncClient(timeout=60) as client:
-                    response = await client.post(
-                        self._embedding_endpoint(),
-                        headers={"Authorization": f"Bearer {settings.EMBEDDING_API_KEY}"},
-                        json={"model": settings.EMBEDDING_MODEL, "input": texts},
-                    )
-                    response.raise_for_status()
-                    data = response.json().get("data") or []
-                return self._validate_vectors([item.get("embedding") for item in data], len(texts))
-        except httpx.HTTPError as exc:
-            raise RAGError(f"El proveedor de embeddings no está disponible: {exc}") from exc
-        raise RAGError(f"Proveedor de embeddings no soportado: {provider}")
+    async def _remote_embeddings(self, texts: list[str]) -> list[list[float]]:
+        return await embed_texts(texts)
 
     @staticmethod
-    def _local_tfidf_vectors(texts: List[str], query: str | None = None) -> tuple[List[List[float]], List[float] | None]:
+    def _local_tfidf_vectors(texts: list[str], query: str | None = None) -> tuple[list[list[float]], list[float] | None]:
+        if not texts:
+            raise RAGError("local_tfidf requiere al menos un fragmento")
+        if len(texts) > settings.RAG_LOCAL_TFIDF_MAX_CHUNKS:
+            raise RAGError("El corpus supera el límite de fragmentos de local_tfidf")
         corpus = texts + ([query] if query is not None else [])
-        vectorizer = TfidfVectorizer(lowercase=True, strip_accents="unicode", ngram_range=(1, 2), min_df=1, max_features=4096)
-        matrix = vectorizer.fit_transform(corpus)
+        corpus_bytes = sum(len(item.encode("utf-8")) for item in corpus)
+        if corpus_bytes > settings.RAG_LOCAL_TFIDF_MAX_CORPUS_BYTES:
+            raise RAGError("El corpus supera el límite de memoria de local_tfidf")
+        vectorizer = TfidfVectorizer(
+            lowercase=True,
+            strip_accents="unicode",
+            ngram_range=(1, 2),
+            min_df=1,
+            max_features=settings.RAG_LOCAL_TFIDF_MAX_FEATURES,
+        )
+        try:
+            matrix = vectorizer.fit_transform(corpus)
+        except ValueError as exc:
+            raise RAGError("El corpus no contiene términos indexables") from exc
         dimension = settings.EMBEDDING_DIMENSION
         max_components = min(max(1, matrix.shape[0] - 1), max(1, matrix.shape[1] - 1), dimension)
         if max_components >= 2:
@@ -261,7 +288,7 @@ class RAGService:
             vectors.append((values + [0.0] * dimension)[:dimension])
         return vectors[: len(texts)], vectors[-1] if query is not None else None
 
-    async def add_document(self, doc_id: str, file_path: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def add_document(self, doc_id: str, file_path: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         path = self.ensure_allowed_path(file_path)
         text = self.extract_text(str(path))
         chunks = self.chunk_text(text)
@@ -272,8 +299,6 @@ class RAGService:
 
         provider = settings.EMBEDDING_PROVIDER.lower()
         if provider == "local_tfidf":
-            if settings.is_production_like:
-                raise RAGError("local_tfidf solo está permitido en desarrollo y pruebas")
             vectors, _ = self._local_tfidf_vectors(chunks)
         else:
             vectors = await self._remote_embeddings(chunks)
@@ -334,6 +359,7 @@ class RAGService:
                         "embedding_provider": provider,
                         "embedding_model": settings.EMBEDDING_MODEL,
                         "embedding_dimension": settings.EMBEDDING_DIMENSION,
+                        "retrieval_mode": provider,
                         **document_metadata,
                     },
                 )
@@ -347,6 +373,7 @@ class RAGService:
             "embedding_provider": provider,
             "embedding_model": settings.EMBEDDING_MODEL,
             "embedding_dimension": settings.EMBEDDING_DIMENSION,
+            "retrieval_mode": provider,
             "classification": classification,
             "dlp_findings": dlp_findings,
         }
@@ -362,10 +389,13 @@ class RAGService:
             role=role,
         )
 
-    async def search(self, query: str, top_k: int = 3, min_score: float | None = None, role: str | None = None) -> Dict[str, Any]:
+    async def search(self, query: str, top_k: int = 3, min_score: float | None = None, role: str | None = None) -> dict[str, Any]:
         clean_query = query.strip()
         if not clean_query:
             raise RAGError("La consulta no puede estar vacía")
+        retrieval_mode = settings.EMBEDDING_PROVIDER.lower()
+        if retrieval_mode not in {"local_tfidf", "ollama", "openai", "openai_compatible"}:
+            raise RAGError(f"Proveedor de embeddings no soportado: {retrieval_mode}")
         if rag_security.looks_like_injection(clean_query):
             return {
                 "abstained": True,
@@ -373,9 +403,17 @@ class RAGService:
                 "answer": "La consulta parece intentar manipular las instrucciones del sistema y se rechaza.",
                 "citations": [],
                 "trusted": False,
+                "retrieval_mode": retrieval_mode,
             }
         if self._looks_like_secret_request(clean_query):
-            return {"abstained": True, "score": 0.0, "answer": "No puedo proporcionar secretos, credenciales ni datos privados.", "citations": [], "trusted": False}
+            return {
+                "abstained": True,
+                "score": 0.0,
+                "answer": "No puedo proporcionar secretos, credenciales ni datos privados.",
+                "citations": [],
+                "trusted": False,
+                "retrieval_mode": retrieval_mode,
+            }
 
         chunks = self.db.query(RAGChunk).all()
         readable: list[RAGChunk] = []
@@ -389,10 +427,17 @@ class RAGService:
             if self._can_read(document, role):
                 readable.append(chunk)
         if not readable:
-            return {"abstained": True, "score": 0.0, "answer": "No hay documentos autorizados disponibles para responder.", "citations": [], "trusted": False}
+            return {
+                "abstained": True,
+                "score": 0.0,
+                "answer": "No hay documentos autorizados disponibles para responder.",
+                "citations": [],
+                "trusted": False,
+                "retrieval_mode": retrieval_mode,
+            }
 
-        provider = settings.EMBEDDING_PROVIDER.lower()
-        query_vector: List[float]
+        provider = retrieval_mode
+        query_vector: list[float]
         scored: list[tuple[float, RAGChunk]]
         if provider == "local_tfidf":
             document_vectors, local_query = self._local_tfidf_vectors([chunk.text for chunk in readable], clean_query)
@@ -429,6 +474,7 @@ class RAGService:
                 "answer": "No tengo evidencia suficiente en los documentos para responder con fiabilidad.",
                 "citations": [],
                 "trusted": False,
+                "retrieval_mode": retrieval_mode,
             }
         citations = []
         evidence = []
@@ -456,6 +502,7 @@ class RAGService:
             # El contenido recuperado es DATO no confiable: nunca debe
             # ejecutarse como instrucción ni tratarse como entrada de usuario.
             "trusted": False,
+            "retrieval_mode": retrieval_mode,
         }
 
     def delete_document(self, doc_id: str) -> bool:
@@ -490,7 +537,7 @@ class RAGService:
         return safe_path
 
     @staticmethod
-    def _cosine(a: List[float], b: List[float]) -> float:
+    def _cosine(a: list[float], b: list[float]) -> float:
         if not a or not b or len(a) != len(b):
             return 0.0
         dot = sum(x * y for x, y in zip(a, b, strict=True))

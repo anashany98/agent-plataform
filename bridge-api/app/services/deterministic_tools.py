@@ -8,25 +8,34 @@ import unicodedata
 import uuid
 from collections.abc import Iterable
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from sqlalchemy import func, update
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
-
+import sqlalchemy as sa
 from app.catalog_policy import TRUSTED_PRODUCTION_CATALOG_SOURCES
 from app.config import settings
 from app.models.models import (
+    Activity,
     ApprovalRequest,
     AuditLog,
+    Campaign,
+    CampaignRecipient,
     ConversationState,
     Customer,
+    EmailTrackingEvent,
     InvoiceDraft,
+    Lead,
+    Opportunity,
     Order,
+    PipelineStage,
     Product,
     Quote,
+    SocialMessage,
+    SocialTriage,
     StockReservation,
 )
+from sqlalchemy import and_, func, or_, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 MONEY = Decimal("0.01")
 
@@ -45,6 +54,16 @@ class InsufficientStockError(BusinessRuleError):
 
 class DeterministicToolsService:
     _PRESTASHOP_COMMERCE_FLAGS = ("active", "show_price", "available_for_order")
+
+    _SEARCH_STOPWORDS = {
+        "para", "con", "una", "uno", "unos", "unas", "que", "del", "las", "los", "por",
+        "necesito", "quiero", "busco", "comprar", "producto", "productos", "unidad", "unidades",
+        "oficina", "recomienda", "recomendar", "mejor", "tengo", "debe", "ser", "algo",
+        # Muletillas/verbos de petición que no describen el producto: "vale"
+        # matcheaba "VALES" del talonario (falso positivo observado en vivo),
+        # "dame"/"quiero" son ruido de intención, no del catálogo.
+        "vale", "dame",
+    }
 
     def __init__(
         self,
@@ -103,7 +122,7 @@ class DeterministicToolsService:
     def _confirmation_payload_hash(
         *,
         customer_id: str,
-        items: List[Dict[str, Any]],
+        items: list[dict[str, Any]],
         subtotal: Any,
         tax_total: Any,
         shipping_total: Any,
@@ -137,9 +156,9 @@ class DeterministicToolsService:
         limit: int = 50,
         *,
         include_demo: bool = False,
-        source: Optional[str] = None,
+        source: str | None = None,
         sources: Iterable[str] | None = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Busca productos verificados del catálogo local.
 
         Args:
@@ -177,6 +196,26 @@ class DeterministicToolsService:
                 product_query = product_query.filter(
                     normalized_source.in_(sorted(normalized_sources))
                 )
+        if self._is_postgres():
+            return self._search_products_postgres(product_query, query, safe_limit)
+        return self._search_products_python(product_query, query, safe_limit)
+
+    def _is_postgres(self) -> bool:
+        return self.db.get_bind().dialect.name == "postgresql"
+
+    def _search_products_python(
+        self,
+        product_query,
+        query: str,
+        safe_limit: int,
+    ) -> list[dict[str, Any]]:
+        """Buscador en memoria (SQLite / entornos sin pg_trgm).
+
+        Conserva la implementación original: carga hasta 5_000 candidatos
+        ordenados por nombre y puntúa en Python. Es la ruta de los tests
+        hermeticos y de despliegues sin la extensión PostgreSQL.
+        """
+
         if not query.strip():
             products = product_query.order_by(Product.name.asc()).limit(5_000).all()
             visible_products = [
@@ -187,22 +226,220 @@ class DeterministicToolsService:
             return [self._product_dict(product) for product in visible_products[:safe_limit]]
 
         normalized_query = self._normalize_search_text(query)
-        stopwords = {
-            "para", "con", "una", "uno", "unos", "unas", "que", "del", "las", "los", "por",
-            "necesito", "quiero", "busco", "comprar", "producto", "productos", "unidad", "unidades",
-            "oficina", "recomienda", "recomendar", "mejor", "tengo", "debe", "ser", "algo",
-        }
-        tokens = [token for token in normalized_query.split() if len(token) >= 2 and token not in stopwords]
+        tokens = self._search_tokens(normalized_query)
         if not tokens:
             return []
-
-        # El MVP de Ofideep trabaja inicialmente con 100-300 productos. Para
-        # ese volumen, puntuar en memoria permite buscar también en atributos
-        # y características JSON sin depender de extensiones específicas de
-        # PostgreSQL ni generar resultados por coincidencia exacta demasiado
-        # frágiles. El límite evita una carga accidental sobre catálogos grandes.
         candidates = product_query.order_by(Product.name.asc()).limit(5_000).all()
-        scored: List[tuple[int, str, Product]] = []
+        return self._score_candidates(candidates, tokens, normalized_query, safe_limit)
+
+    def _search_products_postgres(
+        self,
+        product_query,
+        query: str,
+        safe_limit: int,
+    ) -> list[dict[str, Any]]:
+        """Buscador PostgreSQL con índice GIN trigrama (pg_trgm).
+
+        Con catálogos grandes evita dos problemas del buscador en memoria:
+
+        - La consulta vacía filtra la disponibilidad comercial en SQL y
+          aplica ``LIMIT safe_limit`` sin cargar 5_000 filas por petición.
+        - La búsqueda por tokens usa ``ILIKE '%token%'`` sobre el texto
+          normalizado (acelerado por el índice ``ix_products_search_trgm``
+          de la migración 0009), de modo que el cap de 5_000 candidatos
+          solo se alcanza cuando hay miles de coincidencias reales y no
+          se recorre el catálogo entero para puntuar.
+
+        El scoring final (umbral >= 10, orden por relevancia) es idéntico
+        al del buscador en memoria: el índice solo acota el conjunto de
+        candidatos, no cambia la semántica de los resultados.
+        """
+
+        if not query.strip():
+            rows = (
+                product_query
+                .filter(self._availability_clause())
+                .order_by(Product.name.asc())
+                .limit(safe_limit)
+                .all()
+            )
+            return [self._product_dict(product) for product in rows]
+
+        normalized_query = self._normalize_search_text(query)
+        tokens = self._search_tokens(normalized_query)
+        if not tokens:
+            return []
+        # Incluye la forma singular de cada token: "boligrafos" también
+        # matchea nombres en singular ("BOLIGRAFO ..."), "negros" → "NEGRO".
+        match_forms = self._match_forms(tokens)
+        like_clause = or_(
+            *[self._search_haystack_expr().ilike(f"%{form}%") for form in sorted(match_forms)]
+        )
+        candidates = (
+            product_query.filter(like_clause).order_by(Product.name.asc()).limit(5_000).all()
+        )
+        return self._score_candidates(candidates, tokens, normalized_query, safe_limit)
+
+    @staticmethod
+    def _singularize(token: str) -> str:
+        """Raíz singular de un token español (heurística de búsqueda).
+
+        ``boligrafos`` -> ``boligrafo``, ``negros`` -> ``negro``,
+        ``lapices`` -> ``lapic``, ``azules`` -> ``azul``. Como la búsqueda
+        es por subcadena, la raíz singular sigue matcheando tanto el
+        singular como el plural de los nombres de producto (p. ej.
+        ``LAPICES ALPINO...`` contiene ``lapic``). No se aplica si la raíz
+        quedaría con menos de 3 caracteres (``mes`` se conserva) para no
+        generar ruido tipo ``me``.
+        """
+
+        if len(token) <= 4:
+            return token
+        if token.endswith("es"):
+            root = token[:-2]
+        elif token.endswith("s"):
+            root = token[:-1]
+        else:
+            return token
+        return root if len(root) >= 3 else token
+
+    def _token_matches(self, token: str, text: str) -> bool:
+        """True si el token (o su forma singular) está en ``text``."""
+
+        return token in text or self._singularize(token) in text
+
+    @classmethod
+    def _match_forms(cls, tokens: list[str]) -> set[str]:
+        """Formas de búsqueda por token: el token original y su singular.
+
+        Sin esto, "quiero 50 boligrafos negros" no encontraba el BIC negro
+        (el nombre del producto está en singular: ``BOLIGRAFO ... NEGRO``)
+        y el buscador devolvía matches por subcadena de "vale" (→ VALES).
+        """
+
+        forms: set[str] = set()
+        for token in tokens:
+            forms.add(token)
+            singular = cls._singularize(token)
+            if singular != token:
+                forms.add(singular)
+        return forms
+
+    @staticmethod
+    def _search_tokens(normalized_query: str) -> list[str]:
+        """Tokens de búsqueda con mínimo de 3 caracteres.
+
+        Los tokens de 2 caracteres ("de", "es", "un", ...) son ruido en
+        consultas naturales y matchean SKUs/descripciones por subcadena
+        (p. ej. "de" → "demo", "es" → "escritorio", "un" → "unidad"),
+        produciendo falsos positivos en preguntas no relacionadas con un
+        peso alto de SKU (+12). Solo importan términos significativos de
+        3+ caracteres; los tokens cortos restantes se filtran como
+        stopwords si aparecen ("una", "para", ...).
+        """
+
+        return [
+            token
+            for token in normalized_query.split()
+            if len(token) >= 3 and token not in DeterministicToolsService._SEARCH_STOPWORDS
+        ]
+
+    @staticmethod
+    def _discarded_short_tokens(normalized_query: str) -> list[str]:
+        """Tokens descartados por ser demasiado cortos (<3 caracteres).
+
+        Complementa a ``_search_tokens``: son los términos que el buscador
+        léxico ignora (p. ej. ``de``, ``es``, ``un``) y que, si la consulta
+        solo los contiene, explican un resultado vacío. Se devuelven
+        deduplicados conservando el orden de aparición.
+        """
+
+        seen: set[str] = set()
+        discarded: list[str] = []
+        for token in normalized_query.split():
+            if len(token) < 3 and token not in seen:
+                seen.add(token)
+                discarded.append(token)
+        return discarded
+
+    def search_products_by_sku(self, content: str) -> list[dict[str, Any]]:
+        """Devuelve el producto exacto cuyo SKU aparece literal en el mensaje.
+
+        Cuando el cliente escribe un SKU concreto (p. ej. ``SKU=PS-40``,
+        ``ps-40`` o el código desnudo ``46023``), la búsqueda léxica normal
+        no lo encuentra: los dígitos se descartan como tokens cortos y el
+        ``ILIKE`` no matchea el SKU exacto. Este método hace match exacto
+        contra ``Product.sku`` (case-insensitive) y devuelve ese único
+        producto si es comercialmente disponible; en caso contrario ``[]``.
+        """
+
+        for match in re.finditer(
+            r"(?i)(?:sku\s*[:=]\s*)?\b((?:PS-?\d{2,8})|(?:[A-Z]{2,6}-\d{2,8})|(?:\d{4,6}))\b",
+            content or "",
+        ):
+            sku = match.group(1).strip()
+            product = (
+                self.db.query(Product)
+                .filter(
+                    func.lower(func.trim(Product.sku)) == sku.lower(),
+                    self._non_demo_product_clause(),
+                )
+                .first()
+            )
+            if product:
+                try:
+                    return [self._product_dict(product)]
+                except BusinessRuleError:
+                    # SKU localizado pero no disponible comercialmente:
+                    # seguimos con el siguiente candidato.
+                    continue
+        return []
+
+    @classmethod
+    def _search_haystack_expr(cls):
+        """Texto normalizado de búsqueda (migración 0009 ``bridge_search_norm``).
+
+        Concatena nombre, SKU, categoría, descripción y atributos con la
+        misma normalización que ``_normalize_search_text`` en Python
+        (minúsculas, sin acentos, solo ``[a-z0-9]``) para que el índice
+        GIN trigrama acelere el ``ILIKE``.
+        """
+
+        return func.bridge_search_norm(
+            sa.text(
+                "coalesce(name, '') || ' ' || coalesce(sku, '') || ' ' || "
+                "coalesce(category, '') || ' ' || coalesce(description, '') || ' ' || "
+                "coalesce(attributes::text, '')"
+            )
+        )
+
+    @classmethod
+    def _availability_clause(cls):
+        """Predicado SQL de disponibilidad comercial (equivalente a
+        ``_is_product_commercially_available``): todo producto no-PrestaShop
+        es visible; los PrestaShop requieren los flags de comercio activos.
+        """
+
+        return or_(
+            func.lower(func.trim(Product.source)) != "prestashop",
+            and_(
+                *[
+                    Product.attributes.op("->>")(flag) == "true"
+                    for flag in cls._PRESTASHOP_COMMERCE_FLAGS
+                ]
+            ),
+        )
+
+    def _score_candidates(
+        self,
+        candidates: list[Product],
+        tokens: list[str],
+        normalized_query: str,
+        safe_limit: int,
+    ) -> list[dict[str, Any]]:
+        """Puntuación en memoria de candidatos (compartida por ambos buscadores)."""
+
+        scored: list[tuple[int, str, Product]] = []
         for product in candidates:
             if not self._is_product_commercially_available(product):
                 continue
@@ -213,20 +450,31 @@ class DeterministicToolsService:
             category = self._normalize_search_text(product.category)
             attribute_text = self._normalize_search_text(attributes)
             haystack = " ".join((name, sku, description, category, attribute_text))
-            matched = [token for token in tokens if token in haystack]
+            # Cada token cuenta UNA vez matcheando cualquiera de sus formas
+            # (singular o plural): "boligrafos" → "boligrafo" encuentra el
+            # BIC NEGRO aunque el nombre esté en singular. Un producto cuyo
+            # nombre contiene singular Y plural ("BOLIGRAFO ... 2
+            # BOLIGRAFOS") no debe puntuar doble: eso hundía el BIC negro
+            # frente al RHODIA "PUNTOS NEGROS" (falso positivo observado
+            # en vivo).
+            matched = [
+                token
+                for token in tokens
+                if self._token_matches(token, haystack)
+            ]
             if not matched:
                 continue
             score = 0
             for token in matched:
-                if token in name:
+                if self._token_matches(token, name):
                     score += 10
-                if token in sku:
+                if self._token_matches(token, sku):
                     score += 12
-                if token in category:
+                if self._token_matches(token, category):
                     score += 7
-                if token in attribute_text:
+                if self._token_matches(token, attribute_text):
                     score += 6
-                if token in description:
+                if self._token_matches(token, description):
                     score += 4
             if normalized_query and normalized_query in haystack:
                 score += 15
@@ -242,7 +490,7 @@ class DeterministicToolsService:
         scored.sort(key=lambda item: (-item[0], item[1]))
         return [self._product_dict(product) for _, _, product in scored[:safe_limit]]
 
-    def get_product(self, product_id: str, *, include_demo: bool = False) -> Dict[str, Any]:
+    def get_product(self, product_id: str, *, include_demo: bool = False) -> dict[str, Any]:
         query = self.db.query(Product).filter(Product.id == product_id)
         if not include_demo:
             query = query.filter(self._non_demo_product_clause())
@@ -252,8 +500,20 @@ class DeterministicToolsService:
         self._require_product_commercially_available(product)
         return self._product_dict(product)
 
+    @staticmethod
+    def _iso_utc(value: Any) -> str | None:
+        """Serializa un datetime (naive UTC) como ISO 8601 con sufijo Z."""
+
+        if value is None:
+            return None
+        if isinstance(value, datetime.datetime):
+            if value.tzinfo is not None:
+                value = value.astimezone(datetime.UTC).replace(tzinfo=None)
+            return value.isoformat(timespec="seconds") + "Z"
+        return str(value)
+
     @classmethod
-    def _product_dict(cls, product: Product) -> Dict[str, Any]:
+    def _product_dict(cls, product: Product) -> dict[str, Any]:
         cls._require_product_commercially_available(product)
         return {
             "id": product.id,
@@ -270,9 +530,135 @@ class DeterministicToolsService:
             "stock_quantity": int(product.stock_quantity),
             "reserved_stock": int(product.reserved_stock),
             "available_stock": product.available_stock,
+            "created_at": cls._iso_utc(product.created_at),
+            "updated_at": cls._iso_utc(product.updated_at),
         }
 
-    def get_customer(self, customer_id: str) -> Dict[str, Any]:
+    # Columnas de orden admitidas por ``list_catalog``. El catálogo del
+    # portal solo permite ordenar por campos estables y significativos;
+    # cualquier otro valor se rechaza con 422 (nunca se inyecta en SQL).
+    CATALOG_SORT_COLUMNS = frozenset(
+        {"name", "sku", "category", "unit_price", "available_stock", "created_at", "updated_at"}
+    )
+
+    def _sort_column(self, sort: str):
+        mapping = {
+            "unit_price": Product.base_price,
+            "available_stock": Product.stock_quantity - Product.reserved_stock,
+            "created_at": Product.created_at,
+            "updated_at": Product.updated_at,
+            "sku": Product.sku,
+            "category": Product.category,
+            "name": Product.name,
+        }
+        return mapping[sort]
+
+    def list_catalog(
+        self,
+        *,
+        query: str = "",
+        limit: int = 50,
+        offset: int = 0,
+        sort: str = "name",
+        order: str = "asc",
+        source: str | None = None,
+        sources: Iterable[str] | None = None,
+    ) -> dict[str, Any]:
+        """Listado paginado del catálogo para el portal operativo.
+
+        Devuelve ``{"items": [...], "total": N, "limit": L, "offset": O}``.
+        El conjunto de productos es el mismo que el del chat (orígenes de
+        confianza, sin demo y comercialmente disponibles), pero con
+        paginación por SQL (LIMIT/OFFSET) para catálogos de decenas de
+        miles de filas y orden estable por columna whitelisted.
+
+        Con ``query`` no vacía la búsqueda usa la relevancia del buscador
+        léxico (``search_products``) y el parámetro ``sort`` se ignora
+        (documentado en la API): la paginación recorre el mismo ranking
+        que el chat. Sin query, ``sort``/``order`` controlan el listado
+        completo.
+
+        Raises:
+            BusinessRuleError: si ``sort`` no está en ``CATALOG_SORT_COLUMNS``
+                o ``order`` no es ``asc``/``desc``.
+        """
+
+        if sort not in self.CATALOG_SORT_COLUMNS:
+            raise BusinessRuleError(f"Orden no permitido: {sort}")
+        normalized_order = str(order or "asc").strip().lower()
+        if normalized_order not in {"asc", "desc"}:
+            raise BusinessRuleError(f"Dirección no permitida: {order}")
+        safe_limit = max(1, min(int(limit or 50), 200))
+        safe_offset = max(0, int(offset or 0))
+
+        if str(query or "").strip():
+            scored = self.search_products(
+                query,
+                limit=10_000,
+                source=source,
+                sources=sources,
+            )
+            return {
+                "items": scored[safe_offset : safe_offset + safe_limit],
+                "total": len(scored),
+                "limit": safe_limit,
+                "offset": safe_offset,
+            }
+
+        product_query = self.db.query(Product).filter(self._non_demo_product_clause())
+        if source:
+            normalized_source = func.lower(func.trim(Product.source))
+            product_query = product_query.filter(normalized_source == str(source).strip().lower())
+        if sources:
+            normalized_sources = {
+                str(value).strip().lower()
+                for value in sources
+                if str(value or "").strip()
+            }
+            if normalized_sources:
+                normalized_source = func.lower(func.trim(Product.source))
+                product_query = product_query.filter(
+                    normalized_source.in_(sorted(normalized_sources))
+                )
+        column = self._sort_column(sort)
+        ordered = (
+            product_query.order_by(column.asc() if normalized_order == "asc" else column.desc())
+            .order_by(Product.id.asc())
+        )
+
+        if self._is_postgres():
+            available = ordered.filter(self._availability_clause())
+            rows = (
+                available.offset(safe_offset)
+                .limit(safe_limit)
+                .all()
+            )
+            return {
+                "items": [self._product_dict(product) for product in rows],
+                "total": available.count(),
+                "limit": safe_limit,
+                "offset": safe_offset,
+            }
+
+        # SQLite (entornos herméticos y catálogos pequeños): el predicado
+        # de disponibilidad de PrestaShop usa operadores JSON no portables,
+        # así que se filtran en Python antes de paginar, igual que el
+        # buscador en memoria.
+        visible = [
+            product
+            for product in ordered.limit(20_000).all()
+            if self._is_product_commercially_available(product)
+        ]
+        return {
+            "items": [
+                self._product_dict(product) for product in visible[safe_offset : safe_offset + safe_limit]
+            ],
+            "total": len(visible),
+            "limit": safe_limit,
+            "offset": safe_offset,
+        }
+
+    def get_customer(self, customer_id: str) -> dict[str, Any]:
         customer = self.db.query(Customer).filter(Customer.id == customer_id).first()
         if not customer:
             raise BusinessRuleError(f"Cliente {customer_id} no encontrado")
@@ -290,11 +676,11 @@ class DeterministicToolsService:
         self,
         product_id: str,
         qty: int,
-        customer_id: Optional[str] = None,
-        custom_vat_rate: Optional[float] = None,
+        customer_id: str | None = None,
+        custom_vat_rate: float | None = None,
         is_tax_exempt: bool = False,
-        combination_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        combination_id: str | None = None,
+    ) -> dict[str, Any]:
         if qty <= 0:
             raise BusinessRuleError("La cantidad debe ser mayor que cero")
         product = self.db.query(Product).filter(
@@ -336,7 +722,7 @@ class DeterministicToolsService:
                     "El producto tiene variantes pero no una combinación predeterminada única"
                 )
             combination_id = next(iter(unique_defaults))
-        selected_combination: Dict[str, Any] | None = None
+        selected_combination: dict[str, Any] | None = None
         if combination_id:
             selected_combination = next(
                 (
@@ -500,7 +886,7 @@ class DeterministicToolsService:
         return parsed
 
     @staticmethod
-    def _specific_price_int(row: Dict[str, Any], field: str, default: int = 0) -> int:
+    def _specific_price_int(row: dict[str, Any], field: str, default: int = 0) -> int:
         raw = row.get(field)
         if raw in (None, ""):
             return default
@@ -518,11 +904,11 @@ class DeterministicToolsService:
 
     def _select_specific_price(
         self,
-        rows: List[Dict[str, Any]],
+        rows: list[dict[str, Any]],
         *,
         combination_id: str,
-        scopes: Dict[str, str],
-    ) -> Dict[str, Any] | None:
+        scopes: dict[str, str],
+    ) -> dict[str, Any] | None:
         """Select a safe winner using PrestaShop's authoritative ordering.
 
         PrestaShop's score order can be customized globally and per product,
@@ -571,7 +957,7 @@ class DeterministicToolsService:
             "group_id",
         )
 
-        def exact_scope_set(row: Dict[str, Any]) -> frozenset[str]:
+        def exact_scope_set(row: dict[str, Any]) -> frozenset[str]:
             return frozenset(
                 field
                 for field in score_fields
@@ -611,7 +997,7 @@ class DeterministicToolsService:
             )
         return candidates[0]
 
-    def check_stock(self, product_id: str, qty: int = 1) -> Dict[str, Any]:
+    def check_stock(self, product_id: str, qty: int = 1) -> dict[str, Any]:
         product = self.db.query(Product).filter(
             Product.id == product_id,
             self._non_demo_product_clause(),
@@ -793,12 +1179,14 @@ class DeterministicToolsService:
     def create_quote(
         self,
         customer_id: str,
-        items: List[Dict[str, Any]],
-        custom_vat_rate: Optional[float] = None,
+        items: list[dict[str, Any]],
+        custom_vat_rate: float | None = None,
         account_id: str | None = None,
         conversation_id: str | None = None,
         source_message_id: str | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
+        if not settings.ENABLE_QUOTES:
+            raise BusinessRuleError("Módulo presupuestos deshabilitado")
         if not items:
             raise BusinessRuleError("El presupuesto debe contener al menos una línea")
         if source_message_id:
@@ -828,7 +1216,7 @@ class DeterministicToolsService:
         if not customer:
             raise BusinessRuleError("Cliente no encontrado")
 
-        normalized_items: List[Dict[str, Any]] = []
+        normalized_items: list[dict[str, Any]] = []
         subtotal = Decimal("0")
         tax_total = Decimal("0")
         shipping_total = Decimal("0")
@@ -933,7 +1321,14 @@ class DeterministicToolsService:
         confirmation_token: str,
         *,
         confirmed_by: str | None = None,
-    ) -> Dict[str, Any]:
+        verified_remote_stock: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
+        if not settings.ENABLE_QUOTES:
+            raise BusinessRuleError("Módulo presupuestos deshabilitado")
+        if not settings.ENABLE_ORDERS:
+            raise BusinessRuleError("Módulo pedidos deshabilitado")
+        if not settings.ENABLE_INVOICES:
+            raise BusinessRuleError("Módulo facturas deshabilitado")
         try:
             query = self.db.query(Quote).filter(Quote.id == quote_id)
             if self.db.bind and self.db.bind.dialect.name == "postgresql":
@@ -1004,6 +1399,20 @@ class DeterministicToolsService:
             for item in quote.items:
                 product_id = str(item["product_id"])
                 qty = int(item["qty"])
+                product = self.db.query(Product).filter(Product.id == product_id).first()
+                if product and str(product.source).strip().lower() != "local":
+                    # P0-003 (opción C): autoridad de stock externa
+                    # (PrestaShop). La confirmación solo procede con
+                    # verificación en vivo del stock remoto por el llamador;
+                    # sin ella (fail-closed) el pedido se rechaza con 409.
+                    verified_qty = (verified_remote_stock or {}).get(product_id)
+                    if verified_qty is None or int(verified_qty) < qty:
+                        raise InsufficientStockError(
+                            f"Stock remoto no verificado o insuficiente para {product_id}"
+                        )
+                    # Stock remoto verificado en vivo contra la tienda: no
+                    # hay stock local que reservar para este item.
+                    continue
                 result = self.db.execute(
                     update(Product)
                     .where(Product.id == product_id)
@@ -1117,9 +1526,11 @@ class DeterministicToolsService:
     def create_order(
         self,
         customer_id: str,
-        quote_id: Optional[str] = None,
-        confirmation_token: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        quote_id: str | None = None,
+        confirmation_token: str | None = None,
+    ) -> dict[str, Any]:
+        if not settings.ENABLE_ORDERS:
+            raise BusinessRuleError("Módulo pedidos deshabilitado")
         if not quote_id or not confirmation_token:
             raise BusinessRuleError("quote_id y confirmation_token son obligatorios")
         quote = self.db.query(Quote).filter(Quote.id == quote_id, Quote.customer_id == customer_id).first()
@@ -1132,7 +1543,9 @@ class DeterministicToolsService:
             confirmed_by=f"customer:{customer_id}",
         )
 
-    def create_invoice_draft(self, order_id: str) -> Dict[str, Any]:
+    def create_invoice_draft(self, order_id: str) -> dict[str, Any]:
+        if not settings.ENABLE_INVOICES:
+            raise BusinessRuleError("Módulo facturas deshabilitado")
         existing = self.db.query(InvoiceDraft).filter(InvoiceDraft.order_id == order_id).first()
         if existing:
             return {
@@ -1168,16 +1581,56 @@ class DeterministicToolsService:
             "status": invoice.status,
         }
 
-    def submit_invoice_for_approval(self, invoice_draft_id: str) -> Dict[str, Any]:
+    def submit_invoice_for_approval(
+        self,
+        invoice_draft_id: str,
+        *,
+        requested_by: str = "sales_agent",
+        commit: bool = True,
+    ) -> dict[str, Any]:
+        if not settings.ENABLE_INVOICES:
+            raise BusinessRuleError("Módulo facturas deshabilitado")
         invoice = self.db.query(InvoiceDraft).filter(InvoiceDraft.id == invoice_draft_id).first()
         if not invoice:
             raise BusinessRuleError("Borrador de factura no encontrado")
+        if invoice.status == "approved":
+            raise BusinessRuleError("La factura ya fue aprobada")
         existing = self.db.query(ApprovalRequest).filter(
             ApprovalRequest.action_type == "issue_invoice",
             ApprovalRequest.target_key == invoice_draft_id,
         ).first()
         if existing:
-            return {"approval_id": existing.id, "status": existing.status, "invoice_draft_id": invoice_draft_id}
+            if existing.status == "pending":
+                return {
+                    "approval_id": existing.id,
+                    "status": existing.status,
+                    "invoice_draft_id": invoice_draft_id,
+                }
+            if existing.status == "approved":
+                raise BusinessRuleError("La factura ya fue aprobada")
+            # La unicidad por (action_type, target_key) impide insertar otra
+            # fila. Reutilizamos la solicitud decidida y limpiamos toda la
+            # decisión previa para permitir una re-sumisión explícita.
+            existing.payload = {
+                "invoice_id": invoice.id,
+                "invoice_number": invoice.invoice_number,
+                "amount": float(invoice.total_amount),
+                "currency": invoice.currency,
+            }
+            existing.requested_by = requested_by
+            existing.status = "pending"
+            existing.reviewed_at = None
+            existing.reviewed_by = None
+            existing.rejection_reason = None
+            if commit:
+                self.db.commit()
+            else:
+                self.db.flush()
+            return {
+                "approval_id": existing.id,
+                "status": existing.status,
+                "invoice_draft_id": invoice_draft_id,
+            }
         approval = ApprovalRequest(
             id=f"appr-{uuid.uuid4().hex[:12]}",
             action_type="issue_invoice",
@@ -1188,9 +1641,280 @@ class DeterministicToolsService:
                 "amount": float(invoice.total_amount),
                 "currency": invoice.currency,
             },
-            requested_by="sales_agent",
+            requested_by=requested_by,
             status="pending",
         )
         self.db.add(approval)
-        self.db.commit()
+        if commit:
+            self.db.commit()
+        else:
+            self.db.flush()
         return {"approval_id": approval.id, "status": approval.status, "invoice_draft_id": invoice_draft_id}
+
+    # ------------------------------------------------------------------
+    # Herramientas read-only por módulo (T-057, agentes especializados).
+    # Todas son deterministas, sin LLM/red y SIN mutación: un agente de
+    # un módulo lee su dominio para preparar acciones que, si mutan,
+    # pasan por aprobación humana (deny-by-default del tool_policy).
+    # ------------------------------------------------------------------
+
+    def list_leads(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Lectura del CRM (agente crm_agent): leads con estado y fuente."""
+
+        query = self.db.query(Lead)
+        if status:
+            query = query.filter(Lead.status == str(status).strip())
+        safe_limit = max(1, min(int(limit or 50), 200))
+        rows = (
+            query.order_by(Lead.created_at.desc(), Lead.id.asc())
+            .limit(safe_limit)
+            .all()
+        )
+        items = []
+        for lead in rows:
+            open_opps = (
+                self.db.query(Opportunity.id)
+                .filter(
+                    Opportunity.lead_id == lead.id,
+                    Opportunity.status == "open",
+                )
+                .count()
+            )
+            items.append(
+                {
+                    "id": lead.id,
+                    "first_name": lead.first_name,
+                    "email": lead.email,
+                    "company_name": lead.company_name,
+                    "source": lead.source,
+                    "status": lead.status,
+                    "assigned_to": lead.assigned_to,
+                    "open_opportunities": int(open_opps),
+                    "created_at": (
+                        lead.created_at.isoformat() if lead.created_at else None
+                    ),
+                }
+            )
+        return {"items": items, "total": len(items)}
+
+    def list_activities(
+        self,
+        *,
+        lead_id: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Lectura de actividades (agente crm_agent): tareas y su estado."""
+
+        query = self.db.query(Activity)
+        if lead_id:
+            query = query.filter(Activity.lead_id == str(lead_id).strip())
+        if status:
+            query = query.filter(Activity.status == str(status).strip())
+        safe_limit = max(1, min(int(limit or 50), 200))
+        rows = (
+            query.order_by(Activity.due_at.is_(None), Activity.due_at.asc())
+            .limit(safe_limit)
+            .all()
+        )
+        return {
+            "items": [
+                {
+                    "id": row.id,
+                    "lead_id": row.lead_id,
+                    "title": row.title,
+                    "kind": row.kind,
+                    "status": row.status,
+                    "due_at": row.due_at.isoformat() if row.due_at else None,
+                }
+                for row in rows
+            ],
+            "total": len(rows),
+        }
+
+    def get_pipeline_report(self) -> dict[str, Any]:
+        """Funnel del pipeline (agente crm_agent): por etapa + weighted."""
+
+        stages = (
+            self.db.query(PipelineStage)
+            .order_by(PipelineStage.position.asc(), PipelineStage.id.asc())
+            .all()
+        )
+        stage_names = {stage.key: stage.name for stage in stages}
+        opportunities = self.db.query(Opportunity).all()
+        by_stage: dict[str, dict[str, Any]] = {}
+        open_value = Decimal("0")
+        weighted = Decimal("0")
+        for opportunity in opportunities:
+            key = str(opportunity.stage or "")
+            bucket = by_stage.setdefault(
+                key,
+                {"name": stage_names.get(key, key), "count": 0, "value": 0.0},
+            )
+            bucket["count"] += 1
+            bucket["value"] += float(opportunity.monetary_value or 0)
+            if opportunity.status == "open":
+                open_value += Decimal(str(opportunity.monetary_value or 0))
+                probability = float(opportunity.probability or 0)
+                weighted += Decimal(str(opportunity.monetary_value or 0)) * Decimal(str(probability))
+        return {
+            "by_stage": [by_stage[key] for key in sorted(by_stage)],
+            "open_value": float(open_value),
+            "weighted_pipeline_value": float(weighted),
+        }
+
+    def list_social_inbox(
+        self,
+        *,
+        status: str | None = None,
+        intent: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Inbox social (agente social_agent): mensajes con su triaje."""
+
+        query = self.db.query(SocialMessage)
+        if status:
+            query = query.filter(SocialMessage.status == str(status).strip())
+        if intent:
+            query = query.join(
+                SocialTriage, SocialTriage.message_id == SocialMessage.id
+            ).filter(SocialTriage.intent == str(intent).strip())
+        safe_limit = max(1, min(int(limit or 50), 200))
+        rows = (
+            query.order_by(SocialMessage.created_at.desc(), SocialMessage.id.desc())
+            .limit(safe_limit)
+            .all()
+        )
+        triages = {
+            triage.message_id: triage
+            for triage in self.db.query(SocialTriage)
+            .filter(SocialTriage.message_id.in_([row.id for row in rows]))
+            .all()
+        }
+        items = []
+        for row in rows:
+            triage = triages.get(row.id)
+            items.append(
+                {
+                    "id": row.id,
+                    "channel_id": row.channel_id,
+                    "sender_name": row.sender_name,
+                    "sender_handle": row.sender_handle,
+                    "body": (row.body or "")[:300],
+                    "status": row.status,
+                    "lead_id": row.lead_id,
+                    "created_at": (
+                        row.created_at.isoformat() if row.created_at else None
+                    ),
+                    "triage": (
+                        {
+                            "intent": triage.intent,
+                            "score_social": triage.score_social,
+                            "urgency": triage.urgency,
+                            "language": triage.language,
+                            "summary": triage.summary,
+                        }
+                        if triage is not None
+                        else None
+                    ),
+                }
+            )
+        return {"items": items, "total": len(items)}
+
+    def get_social_stats(self) -> dict[str, Any]:
+        """Resumen del inbox social (agente social_agent)."""
+
+        by_intent = {
+            row[0]: row[1]
+            for row in self.db.query(SocialTriage.intent, func.count(SocialTriage.id))
+            .group_by(SocialTriage.intent)
+            .all()
+        }
+        avg_score = (
+            self.db.query(func.avg(SocialTriage.score_social)).scalar() or 0
+        )
+        pending = (
+            self.db.query(SocialMessage.id)
+            .filter(SocialMessage.status == "pending_triage")
+            .count()
+        )
+        return {
+            "by_intent": by_intent,
+            "pending_triage": int(pending),
+            "avg_score_social": round(float(avg_score), 2),
+        }
+
+    def list_campaigns(
+        self,
+        *,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Campañas (agente marketing_agent): listado con stats de envío."""
+
+        safe_limit = max(1, min(int(limit or 50), 200))
+        rows = (
+            self.db.query(Campaign)
+            .order_by(Campaign.created_at.desc(), Campaign.id.asc())
+            .limit(safe_limit)
+            .all()
+        )
+        return {
+            "items": [
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "template_name": row.template_name,
+                    "status": row.status,
+                    "sent_at": row.sent_at.isoformat() if row.sent_at else None,
+                }
+                for row in rows
+            ],
+            "total": len(rows),
+        }
+
+    def get_campaign_stats(self, campaign_id: str) -> dict[str, Any]:
+        """Estadísticas de una campaña (agente marketing_agent)."""
+
+        campaign = (
+            self.db.query(Campaign).filter(Campaign.id == str(campaign_id).strip()).first()
+        )
+        if campaign is None:
+            raise BusinessRuleError(f"Campaña {campaign_id} no encontrada")
+        recipients = (
+            self.db.query(CampaignRecipient)
+            .filter(CampaignRecipient.campaign_id == campaign.id)
+            .all()
+        )
+        by_status: dict[str, int] = {}
+        for recipient in recipients:
+            by_status[str(recipient.status or "pending")] = (
+                by_status.get(str(recipient.status or "pending"), 0) + 1
+            )
+        tokens = [recipient.tracking_token for recipient in recipients if recipient.tracking_token]
+        opened = 0
+        clicked = 0
+        if tokens:
+            events = (
+                self.db.query(EmailTrackingEvent)
+                .filter(EmailTrackingEvent.token.in_(tokens))
+                .all()
+            )
+            for event in events:
+                if event.event_type == "open":
+                    opened += 1
+                elif event.event_type == "click":
+                    clicked += 1
+        return {
+            "campaign_id": campaign.id,
+            "name": campaign.name,
+            "status": campaign.status,
+            "recipients": len(recipients),
+            "by_status": by_status,
+            "opened": opened,
+            "clicked": clicked,
+        }

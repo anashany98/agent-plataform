@@ -23,32 +23,42 @@ operativo. Cada acción queda auditada (``lifecycle.export``,
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import inspect as sa_inspect
-from sqlalchemy.orm import Session
-
 from app.config import settings
 from app.models.models import (
+    AgentDefinition,
     ApprovalRequest,
     AuditLog,
     ConversationState,
     Customer,
+    DailyLLMBudget,
     IdempotencyRecord,
     InstallationLifecycle,
     InvoiceDraft,
+    LandingPage,
+    Lead,
+    Opportunity,
     Order,
     OutboxMessage,
+    PrestashopSyncHistory,
     Pricelist,
     Product,
     Quote,
     RAGChunk,
     RAGDocument,
+    ScheduledTask,
+    SEOProject,
+    StockReservation,
+    WikiPage,
     utcnow,
 )
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.orm import Session
 
 
 class LifecycleError(ValueError):
@@ -64,32 +74,52 @@ class LegalHoldActive(LifecycleError):
 # cumplimiento; el export incluye únicamente datos operativos.
 _EXPORTABLE_MODELS: tuple[type, ...] = (
     Customer,
+    Lead,
+    Opportunity,
     Pricelist,
     Product,
     Quote,
     Order,
+    StockReservation,
     InvoiceDraft,
     ConversationState,
+    PrestashopSyncHistory,
+    AgentDefinition,
+    WikiPage,
+    SEOProject,
+    LandingPage,
+    ScheduledTask,
     RAGDocument,
     RAGChunk,
     ApprovalRequest,
+    DailyLLMBudget,
     IdempotencyRecord,
     OutboxMessage,
 )
 
 _ERASE_ORDER: tuple[type, ...] = (
     RAGChunk,
-    RAGDocument,
+    StockReservation,
     InvoiceDraft,
+    ConversationState,
     Order,
     Quote,
-    ConversationState,
+    Opportunity,
+    Lead,
     ApprovalRequest,
+    DailyLLMBudget,
     IdempotencyRecord,
     OutboxMessage,
+    PrestashopSyncHistory,
+    AgentDefinition,
+    WikiPage,
+    SEOProject,
+    LandingPage,
+    ScheduledTask,
+    RAGDocument,
     Product,
-    Pricelist,
     Customer,
+    Pricelist,
 )
 
 
@@ -197,6 +227,10 @@ class LifecycleService:
             counts[model.__tablename__] = len(rows)
             sections[model.__tablename__] = [_row_dict(row) for row in rows]
 
+        email_spool, excluded_email_artifacts = self._export_email_spool()
+        counts["automation_email_spool"] = len(email_spool)
+        sections["automation_email_spool"] = email_spool
+
         now = utcnow()
         state = self._ensure_state()
         state.last_export_at = now
@@ -214,6 +248,7 @@ class LifecycleService:
                 details={
                     "installation_id": self.installation_id,
                     "counts": counts,
+                    "excluded_email_artifacts": excluded_email_artifacts,
                     "actor": actor,
                 },
             )
@@ -226,6 +261,9 @@ class LifecycleService:
             "actor": actor,
             "counts": counts,
             "data": sections,
+            "artifact_exclusions": {
+                "automation_email_spool_invalid_or_unsafe": excluded_email_artifacts,
+            },
         }
 
     # ------------------------------------------------------------------
@@ -356,7 +394,9 @@ class LifecycleService:
             query.delete(synchronize_session=False)
             tables[model.__tablename__] = count
 
-        files_removed = self._remove_rag_files(rag_files)
+        rag_files_removed = self._remove_rag_files(rag_files)
+        email_spool_files_removed = self._remove_email_spool_files()
+        files_removed = rag_files_removed + email_spool_files_removed
 
         now = utcnow()
         state.erase_executed_at = now
@@ -370,6 +410,8 @@ class LifecycleService:
                 "installation_id": self.installation_id,
                 "tables": tables,
                 "files_removed": files_removed,
+                "rag_files_removed": rag_files_removed,
+                "email_spool_files_removed": email_spool_files_removed,
             },
         )
         self.db.commit()
@@ -395,6 +437,60 @@ class LifecycleService:
                 continue
             try:
                 candidate.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                continue
+        return removed
+
+    def _email_spool_paths(self, *, include_temporary: bool) -> tuple[list[Path], int]:
+        """Resuelve artefactos del spool pertenecientes sólo al tenant activo."""
+
+        spool_root = Path(settings.AUTOMATION_EMAIL_DIR).resolve()
+        if not spool_root.is_dir():
+            return [], 0
+        tenant_key = hashlib.sha256(self.installation_id.encode("utf-8")).hexdigest()[:16]
+        prefixes = (f"{tenant_key}__", f".{tenant_key}__") if include_temporary else (f"{tenant_key}__",)
+        paths: list[Path] = []
+        excluded = 0
+        try:
+            entries = list(spool_root.iterdir())
+        except OSError:
+            return [], 1
+        for entry in entries:
+            if not entry.name.startswith(prefixes):
+                continue
+            try:
+                candidate = entry.resolve()
+            except OSError:
+                excluded += 1
+                continue
+            if spool_root not in candidate.parents or not candidate.is_file():
+                excluded += 1
+                continue
+            paths.append(candidate)
+        return paths, excluded
+
+    def _export_email_spool(self) -> tuple[list[dict[str, Any]], int]:
+        paths, excluded = self._email_spool_paths(include_temporary=False)
+        artifacts: list[dict[str, Any]] = []
+        for path in paths:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                excluded += 1
+                continue
+            if not isinstance(payload, dict) or payload.get("installation_id") != self.installation_id:
+                excluded += 1
+                continue
+            artifacts.append(_serialize(payload))
+        return artifacts, excluded
+
+    def _remove_email_spool_files(self) -> int:
+        paths, _excluded = self._email_spool_paths(include_temporary=True)
+        removed = 0
+        for path in paths:
+            try:
+                path.unlink(missing_ok=True)
                 removed += 1
             except OSError:
                 continue

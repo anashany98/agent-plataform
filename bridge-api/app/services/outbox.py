@@ -88,8 +88,17 @@ class OutboxService:
         idempotency_key: str,
         payload: dict[str, Any],
         max_attempts: int | None = None,
+        commit: bool = True,
     ) -> tuple[OutboxMessage, bool]:
-        """Encola un efecto externo; devuelve (mensaje, creado?)."""
+        """Encola un efecto externo; devuelve (mensaje, creado?).
+
+        ``commit=False`` deja el mensaje en la transacción abierta del caller:
+        el commit lo hace el propio endpoint, de modo que el mensaje del outbox
+        y la mutación que lo origina (p. ej. la creación del lead) se
+        confirman atómicamente — un fallo posterior descarta ambos con el
+        rollback. Quien use ``commit=False`` debe garantizar que su transacción
+        acaba confirmando o revirtiendo (FastAPI cierra la sesión al final).
+        """
 
         if not topic.strip() or not idempotency_key.strip():
             raise ValueError("topic e idempotency_key son obligatorios")
@@ -104,7 +113,8 @@ class OutboxService:
         )
         self.db.add(message)
         try:
-            self.db.commit()
+            if commit:
+                self.db.commit()
         except IntegrityError:
             self.db.rollback()
             existing = self._find(topic, idempotency_key)

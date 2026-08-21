@@ -20,13 +20,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from fastapi import HTTPException
-from sqlalchemy.orm import Session
-
 from app.models.models import AuditLog
 from app.security import Principal
 from app.services.deterministic_tools import BusinessRuleError, DeterministicToolsService
 from app.services.rag_service import RAGError, RAGService
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
 
 TOOL_POLICY_DENY_BY_DEFAULT = "deny-by-default"
 
@@ -72,6 +71,30 @@ _ARG_SPECS: dict[str, dict[str, Any]] = {
         "query": {"type": "str", "required": True, "max_len": _MAX_TEXT_LEN},
         "top_k": {"type": "int", "min": 1, "max": 10, "default": 3},
     },
+    # T-057: herramientas read-only por módulo para los agentes
+    # especializados. Deterministas y sin mutación (kind "read").
+    "list_leads": {
+        "status": {"type": "str", "max_len": 32, "default": None},
+        "limit": {"type": "int", "min": 1, "max": 200, "default": 50},
+    },
+    "list_activities": {
+        "lead_id": {"type": "str", "max_len": 150, "default": None},
+        "status": {"type": "str", "max_len": 32, "default": None},
+        "limit": {"type": "int", "min": 1, "max": 200, "default": 50},
+    },
+    "get_pipeline_report": {},
+    "list_social_inbox": {
+        "status": {"type": "str", "max_len": 32, "default": None},
+        "intent": {"type": "str", "max_len": 32, "default": None},
+        "limit": {"type": "int", "min": 1, "max": 200, "default": 50},
+    },
+    "get_social_stats": {},
+    "list_campaigns": {
+        "limit": {"type": "int", "min": 1, "max": 200, "default": 50},
+    },
+    "get_campaign_stats": {
+        "campaign_id": {"type": "str", "required": True, "max_len": 150},
+    },
 }
 
 TOOL_SPECS: dict[str, dict[str, Any]] = {
@@ -84,6 +107,13 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
     # confirmación exige la máquina de estados con token y aprobación humana.
     "create_quote": {"kind": "draft", "args": _ARG_SPECS["create_quote"]},
     "rag_search": {"kind": "read", "args": _ARG_SPECS["rag_search"]},
+    "list_leads": {"kind": "read", "args": _ARG_SPECS["list_leads"]},
+    "list_activities": {"kind": "read", "args": _ARG_SPECS["list_activities"]},
+    "get_pipeline_report": {"kind": "read", "args": _ARG_SPECS["get_pipeline_report"]},
+    "list_social_inbox": {"kind": "read", "args": _ARG_SPECS["list_social_inbox"]},
+    "get_social_stats": {"kind": "read", "args": _ARG_SPECS["get_social_stats"]},
+    "list_campaigns": {"kind": "read", "args": _ARG_SPECS["list_campaigns"]},
+    "get_campaign_stats": {"kind": "read", "args": _ARG_SPECS["get_campaign_stats"]},
 }
 
 # Herramientas que ningún agente puede invocar directamente aunque figuren en
@@ -260,4 +290,29 @@ class ToolExecutor:
                 top_k=args.get("top_k", 3),
                 role=self.principal.role,
             )
+        # T-057: herramientas read-only por módulo (agentes especializados).
+        if name == "list_leads":
+            return tools.list_leads(
+                status=args.get("status"), limit=args.get("limit", 50)
+            )
+        if name == "list_activities":
+            return tools.list_activities(
+                lead_id=args.get("lead_id"),
+                status=args.get("status"),
+                limit=args.get("limit", 50),
+            )
+        if name == "get_pipeline_report":
+            return tools.get_pipeline_report()
+        if name == "list_social_inbox":
+            return tools.list_social_inbox(
+                status=args.get("status"),
+                intent=args.get("intent"),
+                limit=args.get("limit", 50),
+            )
+        if name == "get_social_stats":
+            return tools.get_social_stats()
+        if name == "list_campaigns":
+            return tools.list_campaigns(limit=args.get("limit", 50))
+        if name == "get_campaign_stats":
+            return tools.get_campaign_stats(args["campaign_id"])
         raise ToolPolicyError("Herramienta sin executor registrado")  # pragma: no cover

@@ -9,11 +9,9 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.orm import sessionmaker
-
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from app.installation_context import installation_scope
 from app.models.models import Customer, Product, StockReservation
 from app.services.deterministic_tools import DeterministicToolsService
@@ -22,6 +20,8 @@ from scripts.verify_p0_postgres import (
     _require,
     _validated_ephemeral_context,
 )
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import sessionmaker
 
 BRIDGE_API_DIR = Path(__file__).resolve().parents[1]
 
@@ -38,8 +38,28 @@ def _current_revision(engine) -> str | None:
         return connection.scalar(text("SELECT version_num FROM alembic_version"))
 
 
+def _head_revision(config: Config) -> str:
+    heads = ScriptDirectory.from_config(config).get_heads()
+    _require(len(heads) == 1, "migration graph must expose exactly one head", heads)
+    return str(heads[0])
+
+
 def _verify_p1_runtime_schema(engine) -> None:
     inspector = inspect(engine)
+    required_tables = {
+        "installation_lifecycle",
+        "product_embeddings",
+        "leads",
+        "opportunities",
+        "prestashop_sync_history",
+        "agent_definitions",
+        "wiki_pages",
+        "seo_projects",
+        "landing_pages",
+        "scheduled_tasks",
+    }
+    missing_tables = sorted(table for table in required_tables if not inspector.has_table(table))
+    _require(not missing_tables, "post-0004 migration tables are missing", missing_tables)
     _require(inspector.has_table("daily_llm_budgets"), "P1 daily budget ledger is missing")
     _require(inspector.has_table("outbox_messages"), "D-021 outbox/DLQ table is missing")
     idempotency_columns = {
@@ -81,11 +101,29 @@ def _verify_p1_runtime_schema(engine) -> None:
         "sent_at",
         "last_error",
         "response_body",
+        "processing_until",
     }
     _require(
         required_outbox_columns.issubset(outbox_columns),
         "D-021 outbox columns are incomplete",
         sorted(required_outbox_columns - outbox_columns),
+    )
+    product_indexes = {str(index["name"]) for index in inspector.get_indexes("products")}
+    _require(
+        {"ix_products_search_trgm", "ix_product_installation_name_id"}.issubset(
+            product_indexes
+        ),
+        "product indexes from migrations 0009/0010 are missing",
+        sorted(product_indexes),
+    )
+    product_uniques = {
+        str(constraint["name"])
+        for constraint in inspector.get_unique_constraints("products")
+    }
+    _require(
+        "uq_product_installation_source_external_id" in product_uniques,
+        "product uniqueness from migration 0011 is missing",
+        sorted(product_uniques),
     )
 
 
@@ -95,8 +133,13 @@ def _verify_head_cycle(
     installation_id: str,
     run_id: str,
 ) -> dict[str, object]:
+    head_revision = _head_revision(config)
     command.upgrade(config, "head")
-    _require(_current_revision(engine) == "0004", "clean upgrade did not reach 0004")
+    _require(
+        _current_revision(engine) == head_revision,
+        "clean upgrade did not reach Alembic head",
+        head_revision,
+    )
     _verify_p1_runtime_schema(engine)
     customer_id = f"p0-cycle-customer-{run_id}"
     product_id = f"p0-cycle-product-{run_id}"
@@ -170,7 +213,11 @@ def _verify_head_cycle(
     _require(preserved[2] is not None, "safe downgrade removed reservation expiry", preserved)
 
     command.upgrade(config, "head")
-    _require(_current_revision(engine) == "0004", "re-upgrade did not return to 0004")
+    _require(
+        _current_revision(engine) == head_revision,
+        "re-upgrade did not return to Alembic head",
+        head_revision,
+    )
     _verify_p1_runtime_schema(engine)
     with installation_scope(installation_id):
         session = sessionmaker(bind=engine, expire_on_commit=False)()
@@ -186,7 +233,7 @@ def _verify_head_cycle(
             session.close()
     return {
         "mode": "head-cycle",
-        "revision": "0004",
+        "revision": head_revision,
         "fixture_preserved": True,
         "active_reservation_preserved": True,
     }
@@ -308,11 +355,16 @@ def _verify_historical_upgrade(
     installation_id: str,
     run_id: str,
 ) -> dict[str, object]:
+    head_revision = _head_revision(config)
     command.upgrade(config, "0001")
     _require(_current_revision(engine) == "0001", "historical setup did not reach 0001")
     identifiers = _insert_historical_fixture(engine, installation_id, run_id)
     command.upgrade(config, "head")
-    _require(_current_revision(engine) == "0004", "historical upgrade did not reach 0004")
+    _require(
+        _current_revision(engine) == head_revision,
+        "historical upgrade did not reach Alembic head",
+        head_revision,
+    )
     _verify_p1_runtime_schema(engine)
 
     expected_token_hash = hashlib.sha256(b"LEGACY-TOKEN").hexdigest()
@@ -386,7 +438,7 @@ def _verify_historical_upgrade(
     _require(len(foreign_keys) == 12, "historical upgrade lacks composite foreign keys", foreign_keys)
     return {
         "mode": "historical-upgrade",
-        "revision": "0004",
+        "revision": head_revision,
         "fixture_preserved": True,
         "legacy_token_hashed": True,
         "composite_foreign_keys": len(foreign_keys),

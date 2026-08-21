@@ -186,7 +186,20 @@ class LLMRouterService:
             )
         limit = Decimal(str(settings.LLM_MAX_DAILY_COST_USD))
         if Decimal(row.spent_usd or 0) + maximum_cost > limit:
+            # Libera el lock antes de propagar: una transacción abierta con
+            # FOR UPDATE retendría la fila y bloquearía al siguiente
+            # ``_lock_daily_budget`` (síncrono en un handler async) congelando
+            # el event loop entero.
+            self.db.rollback()
             raise HTTPException(status_code=429, detail="Límite diario de gasto de IA alcanzado")
+        # Libera el lock FOR UPDATE AHORA, antes de la llamada al proveedor:
+        # retenerlo a través del await del LLM dejaba la transacción abierta
+        # mientras la segunda petición esperaba el lock en una llamada síncrona
+        # dentro del event loop → bridge colgado (healthchecks caídos 5+ min,
+        # chat de la tienda muerto; reproducido en vivo). El coste real se
+        # registra en la transacción final de ``generate_response``, así que
+        # el lock no necesita abarcar la llamada de red.
+        self.db.commit()
         return row
 
     async def generate_response(

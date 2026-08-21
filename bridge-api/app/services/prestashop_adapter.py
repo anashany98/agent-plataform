@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -278,12 +279,83 @@ class PrestaShopAdapter:
             for item in list(found.values())[:safe_limit]
         ]
 
+    async def list_categories(self) -> Dict[str, str]:
+        """Mapa ``id -> nombre`` de todas las categorías.
+
+        Evita la llamada por producto de ``get_category_name`` (41k+ llamadas
+        en un sync completo). Paginado estable, una llamada por página.
+        """
+
+        result: Dict[str, str] = {}
+        page_size = self._PAGE_SIZE
+        for page_number in range(self._MAX_PAGES):
+            offset = page_number * page_size
+            payload = await self._get(
+                "categories",
+                {"display": "[id,name]", "limit": f"{offset},{page_size}"},
+            )
+            rows = self._rows(payload, "categories")
+            for row in rows:
+                category_id = str(row.get("id") or "").strip()
+                if category_id:
+                    result[category_id] = self._localized(row.get("name")) or ""
+            if len(rows) < page_size:
+                return result
+        raise PrestaShopIntegrationError(
+            "Se superó el límite seguro de paginación de categorías"
+        )
+
+    async def get_stocks_batch(self, product_ids: Iterable[str]) -> Dict[str, int]:
+        """Stock total por producto en un lote (una llamada por ~500 ids).
+
+        ``_normalize_product`` llama a ``get_stock`` por producto (una conexión
+        nueva por llamada), inviable para 41k+ productos. Este método usa
+        ``filter[id_product]`` de PrestaShop para traer el stock de cientos de
+        productos en una sola llamada y suma las filas de variantes.
+        """
+
+        unique_ids = list(
+            dict.fromkeys(str(value).strip() for value in product_ids if str(value or "").strip())
+        )
+        result: Dict[str, int] = {}
+        for offset in range(0, len(unique_ids), self._PAGE_SIZE):
+            chunk = unique_ids[offset : offset + self._PAGE_SIZE]
+            # Paginación hasta EOF (D-033): el límite fijo ``0,4000`` podía
+            # truncar el stock de catálogos con muchas variantes sin
+            # detectarlo.
+            rows = await self._get_paginated_rows(
+                "stock_availables",
+                {
+                    "filter[id_product]": self._filter_ids(chunk),
+                    # ``_get_paginated_rows`` valida unicidad por ``id``; sin
+                    # ``id`` en el display la guarda no puede verificar la
+                    # paginación y rechaza el lote.
+                    "display": "[id,id_product,id_product_attribute,quantity,id_shop]",
+                },
+            )
+            totals: Dict[str, int] = {}
+            for row in rows:
+                product_id = str(row.get("id_product") or "").strip()
+                if not product_id:
+                    continue
+                if self.shop_id and str(row.get("id_shop") or self.shop_id) != str(self.shop_id):
+                    continue
+                try:
+                    totals[product_id] = totals.get(product_id, 0) + int(row.get("quantity") or 0)
+                except (TypeError, ValueError):
+                    continue
+            result.update(totals)
+        return result
+
     async def list_products(
         self,
         limit: int = 300,
         offset: int = 0,
         *,
         include_details: bool = False,
+        category_names: Optional[Dict[str, str]] = None,
+        stock_map: Optional[Dict[str, int]] = None,
+        batch_stock: bool = False,
     ) -> List[Dict[str, Any]]:
         safe_limit = max(1, min(limit, 1_000))
         payload = await self._get(
@@ -299,17 +371,101 @@ class PrestaShopAdapter:
                 "sort": "[id_ASC]",
             },
         )
-        return [
-            await self._normalize_product(item, include_details=include_details)
+        sellable_items = [
+            item
             for item in self._rows(payload, "products")
             if str(item.get("id") or "").strip() and self._is_sellable_product(item)
         ]
+        # Sync masivo: traer el stock de la página en UNA llamada en lugar de
+        # una por producto (inviable para 41k+ SKUs).
+        if stock_map is None and batch_stock:
+            ids = [str(item["id"]).strip() for item in sellable_items]
+            stock_map = await self.get_stocks_batch(ids)
+        return [
+            await self._normalize_product(
+                item,
+                include_details=include_details,
+                stock_map=stock_map,
+                category_names=category_names,
+            )
+            for item in sellable_items
+        ]
+
+    async def list_products_changed_since(
+        self,
+        since: str,
+        *,
+        include_details: bool = False,
+    ) -> tuple[List[Dict[str, Any]], Dict[str, int]]:
+        """Delta del catálogo desde ``since`` (sync incremental).
+
+        Devuelve ``(productos_cambiados, stock_de_todo_el_catálogo)``.
+
+        El webservice de esta tienda no expone ``date_upd`` como filtro ni
+        como campo ordenable (devuelve 500 con ``filter[date_upd]`` y con
+        ``sort=[date_upd_*]``), así que el filtrado por producto es
+        cliente-side: se pagina el listado ligero ``[id,date_upd]`` del
+        catálogo activo (sin llamadas por producto) y solo se recuperan en
+        detalle los ids modificados. ``stock_availables`` tampoco expone
+        ``date_upd``, así que el mapa de stock se devuelve para TODO el
+        catálogo: el endpoint compara contra el stock local y actualiza solo
+        las filas con diferencias (los cambios de stock sin tocar el
+        producto también se recogen el mismo día).
+        """
+
+        catalog_rows = await self._get_paginated_rows(
+            "products",
+            {
+                "display": "[id,date_upd]",
+                "filter[active]": "[1]",
+                "sort": "[id_ASC]",
+            },
+        )
+        # ``date_upd`` viene en formato fijo "YYYY-MM-DD HH:MM:SS": la
+        # comparación lexicográfica es equivalente a la temporal.
+        changed_ids = [
+            str(row["id"]).strip()
+            for row in catalog_rows
+            if str(row.get("date_upd") or "") > since
+        ]
+        all_ids = [str(row["id"]).strip() for row in catalog_rows]
+        category_names = await self.list_categories()
+        stock_map = await self.get_stocks_batch(all_ids)
+        if not changed_ids:
+            return [], stock_map
+        # Sin ``filter[active]`` en el re-fetch: un producto desactivado entre
+        # la detección y la lectura rompería la verificación de completitud de
+        # ``_get_rows_by_ids``; ``_normalize_product`` ya valida la
+        # vendibilidad.
+        full_rows = await self._get_rows_by_ids(
+            "products",
+            changed_ids,
+            {
+                "display": (
+                    "[id,reference,name,description_short,price,id_category_default,"
+                    "id_tax_rules_group,id_default_combination,id_shop_default,active,"
+                    "manufacturer_name,available_for_order,show_price]"
+                )
+            },
+        )
+        products = [
+            await self._normalize_product(
+                item,
+                include_details=include_details,
+                stock_map=stock_map,
+                category_names=category_names,
+            )
+            for item in full_rows
+        ]
+        return products, stock_map
 
     async def _normalize_product(
         self,
         item: Dict[str, Any],
         *,
         include_details: bool,
+        stock_map: Optional[Dict[str, int]] = None,
+        category_names: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         product_id = str(item.get("id") or "").strip()
         if not product_id:
@@ -320,10 +476,18 @@ class PrestaShopAdapter:
         if include_details:
             details = await self.get_product_details(product_id)
 
-        stock = await self.get_stock(product_id)
+        if stock_map is not None:
+            stock = int(stock_map.get(product_id, 0) or 0)
+        else:
+            stock = await self.get_stock(product_id)
         base_price = self._decimal(item.get("price"), field="Precio", product_id=product_id)
         category_id = str(item.get("id_category_default") or "").strip()
-        category_name = await self.get_category_name(category_id) if include_details and category_id else ""
+        if category_names is not None:
+            category_name = category_names.get(category_id, "")
+        elif include_details and category_id:
+            category_name = await self.get_category_name(category_id)
+        else:
+            category_name = ""
         features = details.get("features", [])
         combinations = details.get("combinations", [])
         specific_prices = details.get("specific_prices", [])
@@ -347,9 +511,22 @@ class PrestaShopAdapter:
         country_id = await self.get_country_id()
         currency_id = await self.get_currency_id()
 
+        # Referencias degeneradas de la tienda: números grandes exportados en
+        # notación científica con separador de decimales ("1,12E+11") o flotantes.
+        # No son SKUs válidos y además pueden repetirse en varios productos
+        # (chocaban con ``uq_product_installation_sku`` en el sync masivo).
+        # Los alfanuméricos ("46023", "BB303") se conservan.
+        raw_reference = str(item.get("reference") or "").strip()
+        reference_is_degenerate = bool(
+            isinstance(item.get("reference"), float)
+            or not raw_reference
+            or raw_reference == "0"
+            or re.search(r"[eE][+-]?\d+", raw_reference)
+        )
+
         return {
             "external_id": product_id,
-            "sku": str(item.get("reference") or f"PS-{product_id}").strip(),
+            "sku": f"PS-{product_id}" if reference_is_degenerate else raw_reference,
             "name": self._localized(item.get("name")) or f"Producto {product_id}",
             "description": self._clean_html_text(self._localized(item.get("description_short"))),
             "base_price": float(base_price),
@@ -417,13 +594,16 @@ class PrestaShopAdapter:
         feature_ids = [entry.get("id") or entry.get("id_feature") for entry in entries]
         value_ids = [entry.get("id_feature_value") for entry in entries]
         try:
-            feature_payload = await self._get(
+            # Paginación hasta EOF (D-033): un límite fijo truncaba catálogos
+            # con >1000 features/valores sin detectarlo. El helper valida
+            # además la estabilidad de la paginación.
+            feature_rows = await self._get_paginated_rows(
                 "product_features",
-                {"filter[id]": self._filter_ids(feature_ids), "display": "[id,name]", "limit": "0,1000"},
+                {"filter[id]": self._filter_ids(feature_ids), "display": "[id,name]"},
             )
-            value_payload = await self._get(
+            value_rows = await self._get_paginated_rows(
                 "product_feature_values",
-                {"filter[id]": self._filter_ids(value_ids), "display": "[id,id_feature,custom,value]", "limit": "0,1000"},
+                {"filter[id]": self._filter_ids(value_ids), "display": "[id,id_feature,custom,value]"},
             )
         except PrestaShopIntegrationError:
             # Algunas tiendas restringen estos recursos. Mantener IDs es más
@@ -440,11 +620,11 @@ class PrestaShopAdapter:
 
         feature_map = {
             str(row.get("id")): self._localized(row.get("name"))
-            for row in self._rows(feature_payload, "product_features")
+            for row in feature_rows
         }
         value_map = {
             str(row.get("id")): row
-            for row in self._rows(value_payload, "product_feature_values")
+            for row in value_rows
         }
         result: List[Dict[str, Any]] = []
         for entry in entries:
@@ -519,27 +699,24 @@ class PrestaShopAdapter:
         group_names: Dict[str, str] = {}
         if option_value_ids:
             try:
-                option_payload = await self._get(
+                # Paginación hasta EOF (D-033): sin límite fijo que pueda
+                # truncar miles de opciones de combinación.
+                option_rows = await self._get_paginated_rows(
                     "product_option_values",
-                    {
-                        "filter[id]": self._filter_ids(option_value_ids),
-                        "display": "[id,id_attribute_group,name]",
-                        "limit": "0,1000",
-                    },
+                    {"filter[id]": self._filter_ids(option_value_ids), "display": "[id,id_attribute_group,name]"},
                 )
                 option_values_map = {
-                    str(row.get("id")): row
-                    for row in self._rows(option_payload, "product_option_values")
+                    str(row.get("id")): row for row in option_rows
                 }
                 group_ids = [row.get("id_attribute_group") for row in option_values_map.values()]
                 if group_ids:
-                    group_payload = await self._get(
+                    group_rows = await self._get_paginated_rows(
                         "product_options",
-                        {"filter[id]": self._filter_ids(group_ids), "display": "[id,name]", "limit": "0,1000"},
+                        {"filter[id]": self._filter_ids(group_ids), "display": "[id,name]"},
                     )
                     group_names = {
                         str(row.get("id")): self._localized(row.get("name"))
-                        for row in self._rows(group_payload, "product_options")
+                        for row in group_rows
                     }
             except PrestaShopIntegrationError:
                 option_values_map = {}

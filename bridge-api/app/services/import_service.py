@@ -212,6 +212,9 @@ class ImportService:
                 "imported_count": len(prepared) if entity_type != "stock" else 0,
                 "updated_count": updated,
                 "errors": [],
+                # Ids de los productos creados, para el reindexado semántico
+                # incremental que ejecuta el endpoint tras la importación.
+                "created_ids": [item.id for item in prepared] if entity_type == "products" else [],
             }
         except IntegrityError as exc:
             self.db.rollback()

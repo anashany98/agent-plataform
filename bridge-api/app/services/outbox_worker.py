@@ -71,6 +71,10 @@ class DurableOutboxWorker:
     def last_summary(self) -> dict[str, int]:
         return dict(self._last_summary)
 
+    @property
+    def running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
     def _redis(self):
         if self._backend is not None:
             return self._backend
@@ -96,8 +100,14 @@ class DurableOutboxWorker:
         lock_held = False
         try:
             lock_held = await redis.acquire_lock(DISPATCH_LOCK, self._lock_sec, token)
-        except Exception as exc:  # noqa: BLE001 — sin Redis, poll puro
-            _LOG.warning("Worker sin lock Redis (poll determinista): %s", exc)
+        except Exception as exc:  # noqa: BLE001 - disponibilidad se decide por configuración
+            if not settings.REDIS_RATE_LIMIT_FAIL_OPEN:
+                raise RuntimeError("Redis no disponible para el lock de outbox") from exc
+            # Sólo desarrollo/single-worker puede continuar sin lock. El
+            # perfil production valida fail-open=false y por tanto no entra.
+            _LOG.warning("Worker outbox en poll sin lock distribuido")
+            lock_held = True
+            redis = None
         if not lock_held:
             return {
                 "evaluated": 0,
@@ -117,14 +127,17 @@ class DurableOutboxWorker:
                     )
                     db.commit()
                 self._last_summary = summary
-                import sys  # noqa: E402
-
-                print(f"DEBUG summary={summary}", file=sys.stderr)
+                _LOG.info(
+                    "Ciclo outbox completado evaluated=%s sent=%s dead=%s",
+                    summary.get("evaluated", 0),
+                    summary.get("sent", 0),
+                    summary.get("dead", 0),
+                )
                 return dict(summary)
             finally:
                 db.close()
         finally:
-            if lock_held:
+            if lock_held and redis is not None:
                 try:
                     await redis.release_lock(DISPATCH_LOCK, token)
                 except Exception:  # noqa: BLE001
@@ -148,7 +161,7 @@ class DurableOutboxWorker:
                     redis.pop(SIGNAL_QUEUE, timeout=self._poll_sec),
                     timeout=self._poll_sec + 1.0,
                 )
-            except (TimeoutError, Exception):  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 pass
             await self._cycle()
 
@@ -163,7 +176,7 @@ class DurableOutboxWorker:
         if self._task is not None:
             try:
                 await asyncio.wait_for(self._task, timeout=2.0)
-            except (TimeoutError, Exception):  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 self._task.cancel()
         self._task = None
         self._stop_event = None

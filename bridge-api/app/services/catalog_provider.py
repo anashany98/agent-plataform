@@ -19,10 +19,9 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
-from sqlalchemy.orm import Session
-
 from app.config import settings
 from app.services.deterministic_tools import DeterministicToolsService
+from sqlalchemy.orm import Session
 
 LOCAL_CATALOG_SOURCES = frozenset({"local", "import"})
 PRESTASHOP_CATALOG_SOURCES = frozenset({"prestashop"})

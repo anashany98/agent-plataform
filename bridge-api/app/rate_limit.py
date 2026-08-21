@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import logging
 import time
 from collections import defaultdict, deque
@@ -10,6 +11,10 @@ from starlette.responses import JSONResponse
 from app.config import settings
 
 _LOG = logging.getLogger("bridge.rate_limit")
+
+
+class RateLimitBackendUnavailable(RuntimeError):
+    """El backend distribuido requerido no está operativo."""
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -44,15 +49,44 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _client_ip(request: Request) -> str:
-        real_ip = request.headers.get("x-real-ip", "").strip()
-        if real_ip:
-            return real_ip
-        forwarded = request.headers.get("x-forwarded-for", "")
-        if forwarded:
-            # El proxy de confianza añade la IP remota al final; no se acepta el primer
-            # elemento porque puede ser aportado por el cliente.
-            return forwarded.split(",")[-1].strip()
-        return request.client.host if request.client else "unknown"
+        peer = request.client.host if request.client else "unknown"
+        try:
+            peer_ip = ipaddress.ip_address(peer)
+            trusted_networks = [
+                ipaddress.ip_network(cidr, strict=False)
+                for cidr in settings.trusted_proxy_cidrs
+            ]
+        except ValueError:
+            return peer
+        if not any(peer_ip in network for network in trusted_networks):
+            # Cabeceras procedentes de un peer no configurado son datos del
+            # atacante, incluso si X-Real-IP parece válida.
+            return str(peer_ip)
+
+        trusted_hops = int(getattr(settings, "TRUSTED_PROXY_COUNT", 0))
+        forwarded = [
+            item.strip()
+            for item in request.headers.get("x-forwarded-for", "").split(",")
+            if item.strip()
+        ]
+        if trusted_hops < 1 or len(forwarded) < trusted_hops:
+            return str(peer_ip)
+        try:
+            parsed_forwarded = [ipaddress.ip_address(item) for item in forwarded]
+        except ValueError:
+            return str(peer_ip)
+
+        candidate_index = len(parsed_forwarded) - trusted_hops
+        proxy_hops = [*parsed_forwarded[candidate_index + 1 :], peer_ip]
+        if len(proxy_hops) != trusted_hops or any(
+            not any(proxy_ip in network for network in trusted_networks)
+            for proxy_ip in proxy_hops
+        ):
+            # Una cadena con un supuesto proxy intermedio fuera de las redes
+            # permitidas se rechaza completa en vez de aceptar una identidad
+            # parcialmente controlada por el cliente.
+            return str(peer_ip)
+        return str(parsed_forwarded[candidate_index])
 
     async def _memory_allowed(self, key: str, limit: int, window: int, now: float) -> tuple[bool, int | None]:
         async with self._lock:
@@ -68,6 +102,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def _redis_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int | None]:
         backend = self._redis_backend()
         if backend is None:
+            if not getattr(settings, "REDIS_RATE_LIMIT_FAIL_OPEN", True):
+                raise RateLimitBackendUnavailable("Redis no está habilitado")
             return await self._memory_allowed(key, limit, window, time.monotonic())
         try:
             return await backend.rate_limit(key, limit, window)
@@ -79,7 +115,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 exc,
             )
             if not fail_open:
-                return False, window
+                raise RateLimitBackendUnavailable("Redis no disponible") from exc
             return await self._memory_allowed(key, limit, window, time.monotonic())
 
     async def dispatch(self, request: Request, call_next):
@@ -93,12 +129,30 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         backend_name = getattr(settings, "RATE_LIMIT_BACKEND", "memory").lower()
         if backend_name == "redis" and not getattr(settings, "REDIS_ENABLED", False):
+            if not getattr(settings, "REDIS_RATE_LIMIT_FAIL_OPEN", True):
+                return JSONResponse(
+                    status_code=503,
+                    content={"detail": "Backend de rate limit no disponible"},
+                    headers={"Retry-After": "5"},
+                )
             backend_name = "memory"
 
-        if backend_name in {"redis", "auto"}:
-            allowed, retry_after = await self._redis_allowed(key, limit, window)
-        else:
-            allowed, retry_after = await self._memory_allowed(key, limit, window, time.monotonic())
+        try:
+            if backend_name in {"redis", "auto"}:
+                allowed, retry_after = await self._redis_allowed(key, limit, window)
+            else:
+                allowed, retry_after = await self._memory_allowed(
+                    key,
+                    limit,
+                    window,
+                    time.monotonic(),
+                )
+        except RateLimitBackendUnavailable:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Backend de rate limit no disponible"},
+                headers={"Retry-After": "5"},
+            )
 
         if not allowed:
             return JSONResponse(

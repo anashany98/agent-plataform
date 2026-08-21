@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "agent-platform-bridge-api"
 version = "0.9.1"
 description = "Núcleo transaccional seguro e integraciones para la plataforma de agentes IA"
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.13"
 dynamic = ["dependencies"]
 
 [tool.setuptools.dynamic]
@@ -18,7 +18,7 @@ addopts = "-ra --strict-markers"
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]

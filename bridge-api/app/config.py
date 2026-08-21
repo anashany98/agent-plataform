@@ -1,4 +1,6 @@
+import ipaddress
 import os
+import re
 
 from pydantic import PositiveInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,12 +16,23 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(case_sensitive=True, env_file=".env", extra="ignore")
 
     PROJECT_NAME: str = "Plataforma de Agentes IA - Bridge API"
+    APP_VERSION: str = os.getenv("APP_VERSION", os.getenv("RELEASE_VERSION", "0.9.1-dev"))
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     PILOT_MODE: bool = _bool("PILOT_MODE", "true")
     INSTALLATION_ID: str = os.getenv("INSTALLATION_ID", "development-local")
     AUTO_CREATE_SCHEMA: bool = _bool("AUTO_CREATE_SCHEMA", "false")
     ALLOW_DEMO_DATA: bool = False
     AUTO_SEED_DEMO_DATA: bool = False
+    ENABLE_QUOTES: bool = _bool("ENABLE_QUOTES", "true")
+    ENABLE_ORDERS: bool = _bool("ENABLE_ORDERS", "true")
+    ENABLE_INVOICES: bool = _bool("ENABLE_INVOICES", "true")
+    ENABLE_AUTOMATIC_ORDER_CONFIRMATION: bool = _bool(
+        "ENABLE_AUTOMATIC_ORDER_CONFIRMATION", "false"
+    )
+    ENABLE_AUTOMATIC_INVOICE_ISSUANCE: bool = _bool(
+        "ENABLE_AUTOMATIC_INVOICE_ISSUANCE", "false"
+    )
+    ENABLE_AUTOMATIC_PUBLISHING: bool = _bool("ENABLE_AUTOMATIC_PUBLISHING", "false")
 
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://bridge_user:bridge_pass@localhost:5433/bridge_db")
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://bridge-redis:6379/0")
@@ -36,6 +49,10 @@ class Settings(BaseSettings):
     LOGIN_RATE_LIMIT_REQUESTS: int = int(os.getenv("LOGIN_RATE_LIMIT_REQUESTS", "8"))
     LOGIN_RATE_LIMIT_WINDOW_SEC: int = int(os.getenv("LOGIN_RATE_LIMIT_WINDOW_SEC", "900"))
     TRUSTED_PROXY_COUNT: int = int(os.getenv("TRUSTED_PROXY_COUNT", "1"))
+    TRUSTED_PROXY_CIDRS: str = os.getenv(
+        "TRUSTED_PROXY_CIDRS",
+        "127.0.0.1/32,::1/128",
+    )
 
     # -----------------------------------------------------------------------
     # Fase B (bloque 3): Redis real como backend de rate limit, locks y
@@ -54,10 +71,30 @@ class Settings(BaseSettings):
     REDIS_CONNECT_TIMEOUT_SEC: float = float(os.getenv("REDIS_CONNECT_TIMEOUT_SEC", "0.5"))
     # Worker durable del outbox: procesa la cola en segundo plano.
     OUTBOX_WORKER_ENABLED: bool = _bool("OUTBOX_WORKER_ENABLED", "false")
+    SCHEDULED_TASK_WORKER_ENABLED: bool = _bool(
+        "SCHEDULED_TASK_WORKER_ENABLED", "false"
+    )
     OUTBOX_WORKER_POLL_SEC: float = float(os.getenv("OUTBOX_WORKER_POLL_SEC", "1.0"))
     OUTBOX_WORKER_LEASE_SEC: int = int(os.getenv("OUTBOX_WORKER_LEASE_SEC", "60"))
     OUTBOX_WORKER_DISPATCH_LOCK_SEC: int = int(os.getenv("OUTBOX_WORKER_DISPATCH_LOCK_SEC", "30"))
+    SCHEDULED_TASK_WORKER_POLL_SEC: float = float(
+        os.getenv("SCHEDULED_TASK_WORKER_POLL_SEC", "30.0")
+    )
+    # Worker durable de recordatorios de actividades de comercial (T-044):
+    # envía el email de recordatorio por el spool existente cuando
+    # ``remind_at`` vence. ``reminded_at`` es la llave de idempotencia.
+    ACTIVITY_REMINDER_WORKER_ENABLED: bool = _bool(
+        "ACTIVITY_REMINDER_WORKER_ENABLED", "false"
+    )
+    ACTIVITY_REMINDER_WORKER_POLL_SEC: float = float(
+        os.getenv("ACTIVITY_REMINDER_WORKER_POLL_SEC", "30.0")
+    )
+    PRESTASHOP_SYNC_LOCK_SEC: int = int(os.getenv("PRESTASHOP_SYNC_LOCK_SEC", "1800"))
 
+    # Chatwoot es una integración opcional: el perfil core debe arrancar sin
+    # sus credenciales. Cuando se habilita de forma explícita, producción
+    # valida todas las credenciales y el destino de handoff de forma cerrada.
+    CHATWOOT_ENABLED: bool = _bool("CHATWOOT_ENABLED", "false")
     CHATWOOT_BASE_URL: str = os.getenv("CHATWOOT_BASE_URL", "http://chatwoot-web:3000")
     CHATWOOT_API_TOKEN: str = os.getenv("CHATWOOT_API_TOKEN", "")
     CHATWOOT_WEBHOOK_SECRET: str = os.getenv("CHATWOOT_WEBHOOK_SECRET", "")
@@ -81,7 +118,21 @@ class Settings(BaseSettings):
     GHL_LOCATION_ID: str = os.getenv("GHL_LOCATION_ID", "")
     GHL_PIPELINE_ID: str = os.getenv("GHL_PIPELINE_ID", "")
     GHL_PIPELINE_STAGE_ID: str = os.getenv("GHL_PIPELINE_STAGE_ID", "")
+    # Secreto del webhook de entrada de GHL (firma X-Hub-Signature-256).
+    # Vacío → el endpoint /webhooks/gohighlevel rechaza con 401 (fail-closed).
+    GHL_WEBHOOK_SECRET: str = os.getenv("GHL_WEBHOOK_SECRET", "")
 
+    # Nombre con el que se presenta el asistente comercial en el chat
+    # (persona por cliente; p. ej. "Asistente de BTOP"). Si se deja vacío,
+    # se usa un genérico.
+    COMMERCE_ASSISTANT_NAME: str = os.getenv("COMMERCE_ASSISTANT_NAME", "Asistente de la tienda")
+    # Nombre de la tienda del cliente (persona por cliente). Se usa en la
+    # identidad del asistente y en los cierres de compra (p. ej. "BTOP
+    # Digital"). Si se deja vacío, se omite.
+    COMMERCE_STORE_NAME: str = os.getenv("COMMERCE_STORE_NAME", "")
+    # Memoria de conversación del chat comercial: últimos N mensajes
+    # (cliente + asistente) que se pasan al prompt como contexto.
+    COMMERCE_CHAT_MEMORY_MESSAGES: int = int(os.getenv("COMMERCE_CHAT_MEMORY_MESSAGES", "12"))
     DEFAULT_MODEL_PROFILE: str = os.getenv("DEFAULT_MODEL_PROFILE", "standard")
     CHEAP_LLM_PROVIDER: str = os.getenv("CHEAP_LLM_PROVIDER", "ollama")
     CHEAP_LLM_MODEL: str = os.getenv("CHEAP_LLM_MODEL", "qwen2.5:3b")
@@ -155,6 +206,13 @@ class Settings(BaseSettings):
     EMBEDDING_API_KEY: str = os.getenv("EMBEDDING_API_KEY", "")
     RAG_MIN_SCORE: float = float(os.getenv("RAG_MIN_SCORE", "0.55"))
     RAG_MAX_FILE_MB: int = int(os.getenv("RAG_MAX_FILE_MB", "25"))
+    RAG_LOCAL_TFIDF_MAX_CHUNKS: int = int(os.getenv("RAG_LOCAL_TFIDF_MAX_CHUNKS", "5000"))
+    RAG_LOCAL_TFIDF_MAX_CORPUS_BYTES: int = int(
+        os.getenv("RAG_LOCAL_TFIDF_MAX_CORPUS_BYTES", str(20 * 1024 * 1024))
+    )
+    RAG_LOCAL_TFIDF_MAX_FEATURES: int = int(
+        os.getenv("RAG_LOCAL_TFIDF_MAX_FEATURES", "4096")
+    )
     RAG_UPLOAD_DIR: str = os.getenv("RAG_UPLOAD_DIR", "/data/uploads")
     RAG_ALLOWED_ROOTS: str = os.getenv("RAG_ALLOWED_ROOTS", "/data/uploads")
     OCR_ENABLED: bool = _bool("OCR_ENABLED", "true")
@@ -164,10 +222,51 @@ class Settings(BaseSettings):
 
     # D-012: automatizaciones portadas de FlowWink sin Supabase. El proveedor
     # de email por defecto es local (sin red) para mantener todo verificable.
+    # ``EMAIL_PROVIDER=smtp`` activa el envío real vía SMTP (STARTTLS o SSL);
+    # si el envío falla y ``EMAIL_FALLBACK_TO_LOCAL_SPOOL`` está activo, el
+    # correo se encola en el spool local para entrega manual, con el error
+    # original auditado (degradación controlada, nunca pérdida silenciosa).
     EMAIL_PROVIDER: str = os.getenv("EMAIL_PROVIDER", "local")
+    EMAIL_FALLBACK_TO_LOCAL_SPOOL: bool = _bool("EMAIL_FALLBACK_TO_LOCAL_SPOOL", "true")
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+    SMTP_USERNAME: str = os.getenv("SMTP_USERNAME", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM: str = os.getenv("SMTP_FROM", "")
+    SMTP_STARTTLS: bool = _bool("SMTP_STARTTLS", "true")
+    SMTP_SSL: bool = _bool("SMTP_SSL", "false")
+    SMTP_TIMEOUT_SEC: float = float(os.getenv("SMTP_TIMEOUT_SEC", "10"))
     AUTOMATION_EMAIL_DIR: str = os.getenv("AUTOMATION_EMAIL_DIR", "/data/emails")
+    # Base URL pública usada para construir los enlaces de tracking (pixel de
+    # apertura y redirect de clics) dentro de los correos con plantilla. Vacío
+    # = tracking de enlaces deshabilitado (no se emiten URLs rotas).
+    EMAIL_TRACKING_BASE_URL: str = os.getenv("EMAIL_TRACKING_BASE_URL", "")
+    # Secreto del webhook de rebotes de email (``/webhooks/email-bounce``).
+    # Vacío → el endpoint rechaza con 401 (fail-closed).
+    EMAIL_BOUNCE_WEBHOOK_SECRET: str = os.getenv("EMAIL_BOUNCE_WEBHOOK_SECRET", "")
+    # Superficie de mando del dueño (T-069): el propietario consulta y da
+    # órdenes a los agentes desde el canal que ya usa (email o WhatsApp),
+    # reutilizando el spool de email y la escucha social. La identidad se
+    # configura por instalación; VACÍA = superficie desactivada (fail-closed:
+    # nada se responde y todo se audita como ignorado).
+    OWNER_COMMAND_EMAIL: str = os.getenv("OWNER_COMMAND_EMAIL", "").strip().lower()
+    OWNER_COMMAND_PHONE: str = os.getenv("OWNER_COMMAND_PHONE", "").strip()
+    # Secreto HMAC del webhook entrante de comandos por email
+    # (``POST /commands/email/webhook``); vacío = endpoint rechaza con 401.
+    OWNER_COMMAND_EMAIL_WEBHOOK_SECRET: str = os.getenv(
+        "OWNER_COMMAND_EMAIL_WEBHOOK_SECRET", ""
+    )
     AUTOMATION_QUOTE_EXPIRY_HORIZON_DAYS: int = int(os.getenv("AUTOMATION_QUOTE_EXPIRY_HORIZON_DAYS", "7"))
     AUTOMATION_DUNNING_OVERDUE_DAYS: int = int(os.getenv("AUTOMATION_DUNNING_OVERDUE_DAYS", "15"))
+    # Webhook de triggers de automatización (``POST /automations/triggers/{tipo}``):
+    # si el secreto está configurado, el webhook se autentica por HMAC
+    # (X-Automation-Webhook-Signature/Timestamp); si no, exige bearer admin.
+    # El gate de aprobación es siempre la existencia de una tarea programada
+    # activa (aprobada) del mismo tipo en /scheduled-tasks.
+    AUTOMATION_WEBHOOK_SECRET: str = os.getenv("AUTOMATION_WEBHOOK_SECRET", "")
+    AUTOMATION_WEBHOOK_TIMESTAMP_TOLERANCE_SEC: int = int(
+        os.getenv("AUTOMATION_WEBHOOK_TIMESTAMP_TOLERANCE_SEC", "300")
+    )
     WEBHOOK_OUTBOUND_SECRET: str = os.getenv("WEBHOOK_OUTBOUND_SECRET", "")
     WEBHOOK_OUTBOUND_KEY_ID: str = os.getenv("WEBHOOK_OUTBOUND_KEY_ID", "primary")
     WEBHOOK_OUTBOUND_ALLOWED_HOSTS: str = os.getenv("WEBHOOK_OUTBOUND_ALLOWED_HOSTS", "")
@@ -194,6 +293,10 @@ class Settings(BaseSettings):
         return [host.strip() for host in self.ALLOWED_HOSTS.split(",") if host.strip()]
 
     @property
+    def trusted_proxy_cidrs(self) -> list[str]:
+        return [cidr.strip() for cidr in self.TRUSTED_PROXY_CIDRS.split(",") if cidr.strip()]
+
+    @property
     def is_production_like(self) -> bool:
         return self.ENVIRONMENT.lower() in {"production", "staging"}
 
@@ -203,9 +306,14 @@ class Settings(BaseSettings):
         required = {
             "AUTH_SECRET": self.AUTH_SECRET,
             "INITIAL_ADMIN_PASSWORD": self.INITIAL_ADMIN_PASSWORD,
-            "CHATWOOT_API_TOKEN": self.CHATWOOT_API_TOKEN,
-            "CHATWOOT_WEBHOOK_SECRET": self.CHATWOOT_WEBHOOK_SECRET,
         }
+        if self.CHATWOOT_ENABLED:
+            required.update(
+                {
+                    "CHATWOOT_API_TOKEN": self.CHATWOOT_API_TOKEN,
+                    "CHATWOOT_WEBHOOK_SECRET": self.CHATWOOT_WEBHOOK_SECRET,
+                }
+            )
         invalid_markers = ("replace", "changeme", "development", "dev_secret", "mock", "reemplazar")
         errors = []
         for name, value in required.items():
@@ -213,6 +321,19 @@ class Settings(BaseSettings):
                 errors.append(name)
         if self.ALLOW_MOCK_LLM or self.ALLOW_INTEGRATION_STUBS:
             errors.append("ALLOW_MOCK_LLM/ALLOW_INTEGRATION_STUBS")
+        if self.PILOT_MODE:
+            errors.append("PILOT_MODE")
+        if not re.fullmatch(
+            r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?",
+            self.APP_VERSION,
+        ) or "dev" in self.APP_VERSION.lower():
+            errors.append("APP_VERSION")
+        if (
+            self.ENABLE_AUTOMATIC_ORDER_CONFIRMATION
+            or self.ENABLE_AUTOMATIC_INVOICE_ISSUANCE
+            or self.ENABLE_AUTOMATIC_PUBLISHING
+        ):
+            errors.append("UNSAFE_AUTOMATIC_BUSINESS_ACTIONS")
         if self.AUTO_CREATE_SCHEMA:
             errors.append("AUTO_CREATE_SCHEMA")
         if self.ALLOW_DEMO_DATA:
@@ -228,6 +349,26 @@ class Settings(BaseSettings):
             errors.append("INTEGRATION_RETRY_DELAY")
         if self.IDEMPOTENCY_LEASE_SEC < 30 or self.IDEMPOTENCY_MAX_ATTEMPTS > 20:
             errors.append("IDEMPOTENCY_LEASE/ATTEMPTS")
+        if not self.RATE_LIMIT_ENABLED:
+            errors.append("RATE_LIMIT_ENABLED")
+        try:
+            proxy_networks = [
+                ipaddress.ip_network(cidr, strict=False) for cidr in self.trusted_proxy_cidrs
+            ]
+        except ValueError:
+            proxy_networks = []
+        if not proxy_networks or not 1 <= self.TRUSTED_PROXY_COUNT <= 10:
+            errors.append("TRUSTED_PROXY_CONFIGURATION")
+        if (
+            not self.REDIS_ENABLED
+            or self.RATE_LIMIT_BACKEND.strip().lower() != "redis"
+            or self.REDIS_RATE_LIMIT_FAIL_OPEN
+        ):
+            errors.append("REDIS_RATE_LIMIT_FAIL_CLOSED")
+        if not self.OUTBOX_WORKER_ENABLED:
+            errors.append("OUTBOX_WORKER_ENABLED")
+        if not self.SCHEDULED_TASK_WORKER_ENABLED:
+            errors.append("SCHEDULED_TASK_WORKER_ENABLED")
         if (
             self.CIRCUIT_BREAKER_FAILURE_THRESHOLD < 1
             or self.CIRCUIT_BREAKER_FAILURE_THRESHOLD > 100
@@ -246,8 +387,15 @@ class Settings(BaseSettings):
             errors.append("OUTBOX_RETRY")
         if self.LLM_MAX_DAILY_COST_USD <= 0 or self.LLM_MAX_OUTPUT_TOKENS > 32768:
             errors.append("LLM_BUDGET/TOKEN_LIMIT")
+        if (
+            not 1 <= self.RAG_LOCAL_TFIDF_MAX_CHUNKS <= 20_000
+            or not 1_024 <= self.RAG_LOCAL_TFIDF_MAX_CORPUS_BYTES <= 100 * 1024 * 1024
+            or not 128 <= self.RAG_LOCAL_TFIDF_MAX_FEATURES <= 16_384
+        ):
+            errors.append("RAG_LOCAL_TFIDF_LIMITS")
         configured_external_model = any(
-            provider.strip().lower() not in {"", "ollama", "mock"} and bool(model.strip())
+            provider.strip().lower() not in {"", "none", "ollama", "mock"}
+            and bool(model.strip())
             for provider, model in (
                 (self.CHEAP_LLM_PROVIDER, self.CHEAP_LLM_MODEL),
                 (self.STANDARD_LLM_PROVIDER, self.STANDARD_LLM_MODEL),
@@ -257,8 +405,27 @@ class Settings(BaseSettings):
         )
         if configured_external_model and not self.LLM_PRICING_CATALOG_JSON.strip():
             errors.append("LLM_PRICING_CATALOG_JSON")
-        if self.CHATWOOT_HANDOFF_TEAM_ID <= 0 and self.CHATWOOT_HANDOFF_ASSIGNEE_ID <= 0:
+        if self.EMBEDDING_PROVIDER.strip().lower() not in {
+            "local_tfidf",
+            "ollama",
+            "openai",
+            "openai_compatible",
+        }:
+            errors.append("EMBEDDING_PROVIDER")
+        if self.CHATWOOT_ENABLED and self.CHATWOOT_HANDOFF_TEAM_ID <= 0 and self.CHATWOOT_HANDOFF_ASSIGNEE_ID <= 0:
             errors.append("CHATWOOT_HANDOFF_TEAM_ID/CHATWOOT_HANDOFF_ASSIGNEE_ID")
+        if self.EMAIL_PROVIDER.strip().lower() == "smtp":
+            if not self.SMTP_HOST.strip() or not self.SMTP_FROM.strip():
+                errors.append("SMTP_HOST/SMTP_FROM")
+            if not 1 <= self.SMTP_PORT <= 65535:
+                errors.append("SMTP_PORT")
+            if self.SMTP_SSL and self.SMTP_STARTTLS:
+                errors.append("SMTP_SSL_CON_STARTTLS")
+        if self.EMAIL_PROVIDER.strip().lower() == "ghl":
+            if not self.GHL_API_TOKEN.strip() or not self.GHL_LOCATION_ID.strip():
+                errors.append("GHL_API_TOKEN/GHL_LOCATION_ID")
+        if self.AUTOMATION_WEBHOOK_SECRET and len(self.AUTOMATION_WEBHOOK_SECRET) < 24:
+            errors.append("AUTOMATION_WEBHOOK_SECRET")
         if self.DATABASE_URL.strip().lower().startswith("sqlite"):
             errors.append("DATABASE_URL_SQLITE")
         if "*" in self.allowed_origins or "*" in self.allowed_hosts:

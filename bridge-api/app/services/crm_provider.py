@@ -21,10 +21,9 @@ from __future__ import annotations
 import datetime
 from typing import Any, Protocol, runtime_checkable
 
-from sqlalchemy.orm import Session
-
 from app.config import settings
 from app.models.models import Lead, Opportunity
+from sqlalchemy.orm import Session
 
 EXTERNAL_REFERENCE_KEY = "external_reference"
 
@@ -179,6 +178,8 @@ class LocalCRMProvider:
             currency=settings.CURRENCY,
             pipeline="default",
             stage="new",
+            # En la creación la etapa actual es la inicial (aging empieza aquí).
+            stage_changed_at=datetime.datetime.now(datetime.UTC).replace(tzinfo=None),
             status="open",
             notes=[],
         )

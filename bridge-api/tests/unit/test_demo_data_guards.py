@@ -3,18 +3,20 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
-
 from app import seed
 from app.config import Settings
 from app.models.models import Customer, Product, User
+from pydantic import ValidationError
 
 
 def _production_like_settings(environment: str, **overrides: object) -> Settings:
     values: dict[str, object] = {
         "ENVIRONMENT": environment,
+        "APP_VERSION": "1.0.0+test",
         "AUTH_SECRET": "synthetic-auth-secret-with-more-than-32-characters",
         "INITIAL_ADMIN_PASSWORD": "Synthetic-Admin-Password-For-Tests!",
+        "PILOT_MODE": False,
+        "CHATWOOT_ENABLED": True,
         "CHATWOOT_API_TOKEN": "synthetic-chatwoot-api-token-for-tests-0123",
         "CHATWOOT_WEBHOOK_SECRET": "synthetic-webhook-secret-with-more-than-32-characters",
         "CHATWOOT_HANDOFF_TEAM_ID": 1,
@@ -23,6 +25,14 @@ def _production_like_settings(environment: str, **overrides: object) -> Settings
         "AUTO_CREATE_SCHEMA": False,
         "ALLOW_DEMO_DATA": False,
         "AUTO_SEED_DEMO_DATA": False,
+        "RATE_LIMIT_ENABLED": True,
+        "TRUSTED_PROXY_COUNT": 2,
+        "TRUSTED_PROXY_CIDRS": "172.16.0.0/12",
+        "REDIS_ENABLED": True,
+        "RATE_LIMIT_BACKEND": "redis",
+        "REDIS_RATE_LIMIT_FAIL_OPEN": False,
+        "OUTBOX_WORKER_ENABLED": True,
+        "SCHEDULED_TASK_WORKER_ENABLED": True,
         # Autocontenido: en production-like SQLite/CORS abierto/DEBUG se rechazan
         # (D-022), así que el fixture usa PostgreSQL y orígenes/host cerrados para
         # aislar el comportamiento de los flags demo.

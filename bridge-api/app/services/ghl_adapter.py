@@ -83,6 +83,50 @@ class GHLAdapter:
     async def add_note(self, contact_id: str, body: str) -> dict[str, Any]:
         return await self._request("POST", f"/contacts/{contact_id}/notes", json={"body": body})
 
+    async def send_sms(self, *, contact_id: str, content: str) -> dict[str, Any]:
+        """Envía un SMS a un contacto (T-083).
+
+        Endpoint documentado de GHL: ``POST /contacts/{contactId}/messages``
+        con ``type=SMS``. El mensaje se envía desde el número configurado en
+        la subcuenta de GHL.
+        """
+
+        return await self._request(
+            "POST",
+            f"/contacts/{contact_id}/messages",
+            json={
+                "type": "SMS",
+                "contactId": contact_id,
+                "content": content,
+            },
+        )
+
+    async def send_email(
+        self,
+        *,
+        contact_id: str,
+        subject: str,
+        content: str,
+        html: str | None = None,
+    ) -> dict[str, Any]:
+        """Envía un email a un contacto (T-083).
+
+        Mismo endpoint de mensajes de GHL con ``type=email``. El asunto es
+        obligatorio en GHL; el cuerpo puede ser texto plano o HTML.
+        """
+
+        payload: dict[str, Any] = {
+            "type": "email",
+            "contactId": contact_id,
+            "subject": subject,
+            "content": content,
+        }
+        if html:
+            payload["html"] = html
+        return await self._request(
+            "POST", f"/contacts/{contact_id}/messages", json=payload
+        )
+
     async def _page_results(self, path: str, params: dict[str, Any], list_key: str) -> list[dict[str, Any]]:
         """Paginación acotada hasta EOF; un listado anómalo falla cerrado.
 
