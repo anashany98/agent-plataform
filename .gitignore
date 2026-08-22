@@ -56,3 +56,5 @@ clients/*/imports/private/
 # Dependencias vendor reproducibles mediante infrastructure/vendor-lock.json
 # y scripts/verify-vendor-pins.py. No se versionan clones Git anidados.
 vendor/
+.venv-py311-backup/
+.venv312/
