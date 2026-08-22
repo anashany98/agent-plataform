@@ -1737,6 +1737,42 @@ else:  # SQLite / entornos sin pgvector: la tabla no existe (migración 0006)
     ProductEmbedding = None  # type: ignore[assignment,misc]
 
 
+class AlertDelivery(InstallationOwnedMixin, Base):
+    """Alerta persistida para entrega externa (SS-07).
+
+    El ``AlertSink`` in-memory se pierde con el reinicio del proceso y no
+    avisa a nadie: esta tabla hace la alerta durable. El worker de entrega
+    la envía por webhook (HMAC) y/o email con reintento y backoff; el
+    ``dedup_key`` (regla + ventana temporal) evita tormentas de alertas
+    idénticas mientras la condición persiste.
+    """
+
+    __tablename__ = "alert_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "installation_id",
+            "dedup_key",
+            name="uq_alert_delivery_installation_dedup",
+        ),
+        Index("ix_alert_deliveries_due", "status", "next_attempt_at"),
+        Index("ix_alert_deliveries_rule", "installation_id", "rule_id"),
+    )
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    rule_id = Column(String(128), nullable=False)
+    severity = Column(String(16), nullable=False, default="warning")
+    summary = Column(Text, nullable=False)
+    details = Column(JSON, nullable=True)
+    dedup_key = Column(String(128), nullable=False)
+    status = Column(String(16), nullable=False, default="pending")
+    attempts = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=8)
+    next_attempt_at = Column(DateTime, nullable=False, default=utcnow)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    delivered_at = Column(DateTime, nullable=True)
+
+
 def _installation_owned_instances(session: Session):
     """Return rows whose pending lifecycle operation crosses the tenant boundary."""
 

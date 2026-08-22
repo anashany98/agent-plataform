@@ -59,6 +59,11 @@ CLEAN_ZONE_FILES = (
     "bridge-api/app/services/crm_provider.py",
     "bridge-api/app/services/redis_backend.py",
     "bridge-api/app/services/outbox_worker.py",
+    "bridge-api/app/services/alert_delivery.py",
+    "bridge-api/app/services/alert_delivery_worker.py",
+    "bridge-api/app/routers/common.py",
+    "bridge-api/app/routers/appearance.py",
+    "bridge-api/app/routers/system.py",
     "scripts/audit_dependencies.py",
     "scripts/quality_gates.py",
 )

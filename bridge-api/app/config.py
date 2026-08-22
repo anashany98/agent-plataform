@@ -89,6 +89,25 @@ class Settings(BaseSettings):
     ACTIVITY_REMINDER_WORKER_POLL_SEC: float = float(
         os.getenv("ACTIVITY_REMINDER_WORKER_POLL_SEC", "30.0")
     )
+    # SS-07: entrega externa y durable de alertas. El worker evalúa las
+    # reglas (breakers, DLQ, RAG), persiste cada alerta en
+    # ``alert_deliveries`` (sobrevive reinicios) y la entrega por webhook
+    # firmado (HMAC SHA256) y/o email. Sin canales configurados no hay
+    # observabilidad real: producción exige worker + al menos un canal.
+    ALERT_DELIVERY_WORKER_ENABLED: bool = _bool(
+        "ALERT_DELIVERY_WORKER_ENABLED", "false"
+    )
+    ALERT_DELIVERY_WORKER_POLL_SEC: float = float(
+        os.getenv("ALERT_DELIVERY_WORKER_POLL_SEC", "15.0")
+    )
+    ALERT_WEBHOOK_URL: str = os.getenv("ALERT_WEBHOOK_URL", "")
+    ALERT_WEBHOOK_SECRET: str = os.getenv("ALERT_WEBHOOK_SECRET", "")
+    ALERT_EMAIL_TO: str = os.getenv("ALERT_EMAIL_TO", "")
+    ALERT_MAX_ATTEMPTS: PositiveInt = int(os.getenv("ALERT_MAX_ATTEMPTS", "8"))
+    ALERT_DEDUP_WINDOW_SEC: PositiveInt = int(os.getenv("ALERT_DEDUP_WINDOW_SEC", "900"))
+    # Token opcional para el scraping de /metrics/prometheus por parte de
+    # un collector externo; vacío = exige sesión admin como /metrics.
+    PROMETHEUS_METRICS_TOKEN: str = os.getenv("PROMETHEUS_METRICS_TOKEN", "")
     PRESTASHOP_SYNC_LOCK_SEC: int = int(os.getenv("PRESTASHOP_SYNC_LOCK_SEC", "1800"))
 
     # Chatwoot es una integración opcional: el perfil core debe arrancar sin
@@ -373,6 +392,16 @@ class Settings(BaseSettings):
             errors.append("OUTBOX_WORKER_ENABLED")
         if not self.SCHEDULED_TASK_WORKER_ENABLED:
             errors.append("SCHEDULED_TASK_WORKER_ENABLED")
+        if not self.ALERT_DELIVERY_WORKER_ENABLED:
+            errors.append("ALERT_DELIVERY_WORKER_ENABLED")
+        if (
+            not self.ALERT_WEBHOOK_URL.strip()
+            and not self.ALERT_EMAIL_TO.strip()
+        ):
+            # SS-07: sin canal externo, las alertas mueren con el proceso.
+            errors.append("ALERT_SINK_NOT_CONFIGURED")
+        if self.ALERT_WEBHOOK_SECRET and len(self.ALERT_WEBHOOK_SECRET) < 24:
+            errors.append("ALERT_WEBHOOK_SECRET")
         if (
             self.CIRCUIT_BREAKER_FAILURE_THRESHOLD < 1
             or self.CIRCUIT_BREAKER_FAILURE_THRESHOLD > 100

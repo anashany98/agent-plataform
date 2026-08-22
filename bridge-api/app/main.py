@@ -187,6 +187,7 @@ async def lifespan(app: FastAPI):
     outbox_worker = None
     scheduled_task_worker = None
     activity_reminder_worker = None
+    alert_delivery_worker = None
     try:
         if getattr(settings, "OUTBOX_WORKER_ENABLED", False):
             from app.services.outbox_worker import DurableOutboxWorker
@@ -205,11 +206,19 @@ async def lifespan(app: FastAPI):
 
             activity_reminder_worker = DurableActivityReminderWorker()
             await activity_reminder_worker.start()
+        if getattr(settings, "ALERT_DELIVERY_WORKER_ENABLED", False):
+            from app.services.alert_delivery_worker import DurableAlertDeliveryWorker
+
+            alert_delivery_worker = DurableAlertDeliveryWorker()
+            await alert_delivery_worker.start()
         app.state.outbox_worker = outbox_worker
         app.state.scheduled_task_worker = scheduled_task_worker
         app.state.activity_reminder_worker = activity_reminder_worker
+        app.state.alert_delivery_worker = alert_delivery_worker
         yield
     finally:
+        if alert_delivery_worker is not None:
+            await alert_delivery_worker.stop()
         if activity_reminder_worker is not None:
             await activity_reminder_worker.stop()
         if scheduled_task_worker is not None:

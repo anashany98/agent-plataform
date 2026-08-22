@@ -33,6 +33,10 @@ def _production_like_settings(environment: str, **overrides: object) -> Settings
         "REDIS_RATE_LIMIT_FAIL_OPEN": False,
         "OUTBOX_WORKER_ENABLED": True,
         "SCHEDULED_TASK_WORKER_ENABLED": True,
+        # SS-07: producción exige worker de alertas y canal externo.
+        "ALERT_DELIVERY_WORKER_ENABLED": True,
+        "ALERT_EMAIL_TO": "guardia@example.invalid",
+        "INSTALLATION_ID": "production-installation",
         # Autocontenido: en production-like SQLite/CORS abierto/DEBUG se rechazan
         # (D-022), así que el fixture usa PostgreSQL y orígenes/host cerrados para
         # aislar el comportamiento de los flags demo.

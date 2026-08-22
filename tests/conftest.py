@@ -64,6 +64,13 @@ os.environ.update(
         'OUTBOX_RETRY_BASE_DELAY_SEC': '0.01',
         'OUTBOX_RETRY_MAX_DELAY_SEC': '0.05',
         'OUTBOX_BATCH_SIZE': '8',
+        # SS-07: los tests no entregan alertas fuera del proceso; la
+        # suite de entrega configura canales y worker explícitamente.
+        'ALERT_DELIVERY_WORKER_ENABLED': 'false',
+        'ALERT_WEBHOOK_URL': '',
+        'ALERT_WEBHOOK_SECRET': '',
+        'ALERT_EMAIL_TO': '',
+        'PROMETHEUS_METRICS_TOKEN': '',
     }
 )
 
