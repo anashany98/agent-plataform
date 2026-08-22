@@ -92,9 +92,23 @@ _ARG_SPECS: dict[str, dict[str, Any]] = {
     "list_campaigns": {
         "limit": {"type": "int", "min": 1, "max": 200, "default": 50},
     },
-    "get_campaign_stats": {
-        "campaign_id": {"type": "str", "required": True, "max_len": 150},
-    },
+        "get_campaign_stats": {
+            "campaign_id": {"type": "str", "required": True, "max_len": 150},
+        },
+        # Mejoras de agentes: contenido/SEO/wiki/landing y SLA social.
+        "search_wiki": {
+            "query": {"type": "str", "max_len": 500, "default": ""},
+            "status": {"type": "str", "max_len": 32, "default": "published"},
+            "limit": {"type": "int", "min": 1, "max": 100, "default": 20},
+        },
+        "get_seo_overview": {},
+        "list_landing_pages": {
+            "status": {"type": "str", "max_len": 32, "default": None},
+            "limit": {"type": "int", "min": 1, "max": 200, "default": 50},
+        },
+        "list_social_sla_breaches": {
+            "limit": {"type": "int", "min": 1, "max": 200, "default": 50},
+        },
 }
 
 TOOL_SPECS: dict[str, dict[str, Any]] = {
@@ -114,6 +128,14 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
     "get_social_stats": {"kind": "read", "args": _ARG_SPECS["get_social_stats"]},
     "list_campaigns": {"kind": "read", "args": _ARG_SPECS["list_campaigns"]},
     "get_campaign_stats": {"kind": "read", "args": _ARG_SPECS["get_campaign_stats"]},
+    # Mejoras de agentes (contenido/SEO/wiki/landing y SLA social).
+    "search_wiki": {"kind": "read", "args": _ARG_SPECS["search_wiki"]},
+    "get_seo_overview": {"kind": "read", "args": _ARG_SPECS["get_seo_overview"]},
+    "list_landing_pages": {"kind": "read", "args": _ARG_SPECS["list_landing_pages"]},
+    "list_social_sla_breaches": {
+        "kind": "read",
+        "args": _ARG_SPECS["list_social_sla_breaches"],
+    },
 }
 
 # Herramientas que ningún agente puede invocar directamente aunque figuren en
@@ -315,4 +337,18 @@ class ToolExecutor:
             return tools.list_campaigns(limit=args.get("limit", 50))
         if name == "get_campaign_stats":
             return tools.get_campaign_stats(args["campaign_id"])
+        if name == "search_wiki":
+            return tools.search_wiki(
+                query=args.get("query"),
+                status=args.get("status", "published"),
+                limit=args.get("limit", 20),
+            )
+        if name == "get_seo_overview":
+            return tools.get_seo_overview()
+        if name == "list_landing_pages":
+            return tools.list_landing_pages(
+                status=args.get("status"), limit=args.get("limit", 50)
+            )
+        if name == "list_social_sla_breaches":
+            return tools.list_social_sla_breaches(limit=args.get("limit", 50))
         raise ToolPolicyError("Herramienta sin executor registrado")  # pragma: no cover

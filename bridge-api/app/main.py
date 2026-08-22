@@ -1365,12 +1365,17 @@ AGENT_REGISTRY: dict[str, dict[str, Any]] = {
         "purpose": "Vigilar el inbox social: mensajes, triaje y SLAs de respuesta",
         "prompt": (
             "Eres el agente del módulo de Escucha social. Vigila mensajes "
-            "entrantes (WhatsApp/webhooks), su triaje y urgencia. Alerta de "
-            "quejas y mensajes fuera de SLA. Solo lees; el descarte lo "
-            "confirma un operador."
+            "entrantes (WhatsApp/webhooks), su triaje y urgencia. Prioriza "
+            "los incumplimientos de SLA con list_social_sla_breaches: una "
+            "queja pública vencida (15 min) va antes que todo. Solo lees; "
+            "el descarte lo confirma un operador."
         ),
         "autonomy_level": "L0_Respuesta_Limitada",
-        "allowed_tools": ["list_social_inbox", "get_social_stats"],
+        "allowed_tools": [
+            "list_social_inbox",
+            "get_social_stats",
+            "list_social_sla_breaches",
+        ],
         "primary_model": "standard",
         "fallback_model": "cheap",
         "monthly_budget_usd": 10.0,
@@ -1404,17 +1409,25 @@ AGENT_REGISTRY: dict[str, dict[str, Any]] = {
         "purpose": "Gestionar contenido: responder con evidencia del RAG/wiki y SEO",
         "prompt": (
             "Eres el agente del módulo de Contenido y SEO. Responde con "
-            "evidencia recuperada y cita fuentes; abstente si no hay "
-            "evidencia."
+            "evidencia recuperada (rag_search) o de la wiki (search_wiki) "
+            "y cita la fuente; abstente si no hay evidencia. Usa "
+            "get_seo_overview para el estado de proyectos SEO, landings y "
+            "wiki, y list_landing_pages para revisar landings pendientes "
+            "de aprobación. Nunca publicas ni apruebas: propones."
         ),
         "autonomy_level": "L0_Respuesta_Limitada",
-        "allowed_tools": ["rag_search"],
+        "allowed_tools": [
+            "rag_search",
+            "search_wiki",
+            "get_seo_overview",
+            "list_landing_pages",
+        ],
         "primary_model": "standard",
         "fallback_model": "cheap",
         "monthly_budget_usd": 12.0,
         "module": "content",
         "module_label": "Contenido y SEO",
-        "scope": "wiki, RAG, sitemap/RSS/llms.txt y generadores SEO",
+        "scope": "wiki, RAG, sitemap/RSS/llms.txt, landings y generadores SEO",
         "status": "active",
     },
     # T-067: CEO agent — mando en lenguaje natural para el dueño. No ejecuta
@@ -1438,6 +1451,7 @@ AGENT_REGISTRY: dict[str, dict[str, Any]] = {
             "list_activities",
             "list_social_inbox",
             "get_social_stats",
+            "list_social_sla_breaches",
             "list_campaigns",
             "get_campaign_stats",
             "search_products",
@@ -2520,6 +2534,54 @@ async def _try_semantic_catalog_search(
             "Búsqueda semántica del chat falló (se continúa sin resultados): %s", exc
         )
         return []
+
+
+def _scrub_unavailable_stock_claims(
+    reply: str, products: list[dict[str, Any]] | None
+) -> str:
+    """G-03: el chat nunca afirma disponibilidad de un producto agotado.
+
+    Residual de T-038/T-040 (modelos pequeños afirmaban stock de productos
+    con existencias a 0). Post-filtro determinista y conservador: si la
+    respuesta menciona por nombre o SKU un producto verificado sin stock,
+    añade SIEMPRE una nota correctora veraz al final, en lugar de
+    reescribir frases (frágil sobre lenguaje natural). Con productos
+    disponibles o sin menciones, la respuesta sale intacta.
+    """
+
+    if not reply or not products:
+        return reply
+    lowered = reply.lower()
+    unavailable: list[str] = []
+    for product in products:
+        if not isinstance(product, dict):
+            continue
+        try:
+            stock = int(product.get("stock_quantity") or 0)
+        except (TypeError, ValueError):
+            stock = 0
+        if product.get("available") is False:
+            stock = 0
+        if stock > 0:
+            continue
+        name = str(product.get("name") or "").strip()
+        sku = str(product.get("sku") or "").strip()
+        label = name or sku
+        token = label.lower()
+        sku_token = sku.lower()
+        mentioned = bool(token) and (token in lowered or (bool(sku_token) and sku_token in lowered))
+        if mentioned and label not in unavailable:
+            unavailable.append(label)
+    if not unavailable:
+        return reply
+    names = ", ".join(unavailable[:5])
+    note = (
+        f"Actualización de disponibilidad: {names} "
+        "sin stock disponible ahora mismo."
+    )
+    if note in reply:
+        return reply
+    return reply.rstrip() + "\n\n" + note
 
 
 async def _safe_chat_reply_with_categories(
@@ -3931,6 +3993,9 @@ async def receive_chatwoot_webhook(
                     )
                     reply = ai_reply["answer"]
                     provider_used = ai_reply["provider"]
+                    reply = _scrub_unavailable_stock_claims(
+                        reply, browse_products
+                    )
                 except Exception as exc:  # noqa: BLE001 - fallback determinista, con log
                     logging.getLogger("bridge.api").warning(
                         "LLM de búsqueda de catálogo falló (fallback determinista): %s", exc
@@ -4124,6 +4189,9 @@ async def receive_chatwoot_webhook(
                         )
                         reply = ai_reply["answer"]
                         provider_used = ai_reply["provider"]
+                        reply = _scrub_unavailable_stock_claims(
+                            reply, comparison_result[1]
+                        )
                     except Exception as exc:  # noqa: BLE001 - fallback extractivo, con log
                         logging.getLogger("bridge.api").warning(
                             "LLM de comparación falló (fallback extractivo): %s", exc
@@ -4217,6 +4285,9 @@ async def receive_chatwoot_webhook(
                         )
                         reply = ai_reply["answer"]
                         provider_used = ai_reply["provider"]
+                        reply = _scrub_unavailable_stock_claims(
+                            reply, verified_products
+                        )
                     except Exception as exc:  # noqa: BLE001 - fallback determinista, con log
                         logging.getLogger("bridge.api").warning(
                             "LLM de listado de catálogo falló (fallback determinista): %s", exc
@@ -4350,6 +4421,9 @@ async def receive_chatwoot_webhook(
                             )
                             reply = ai_reply["answer"]
                             provider_used = ai_reply["provider"]
+                            reply = _scrub_unavailable_stock_claims(
+                                reply, verified_products
+                            )
                         except Exception as exc:  # noqa: BLE001 - fallback determinista, con log
                             logging.getLogger("bridge.api").warning(
                                 "LLM de categoría falló (fallback determinista): %s", exc
@@ -4425,6 +4499,9 @@ async def receive_chatwoot_webhook(
                     )
                     reply = ai_reply["answer"]
                     provider_used = ai_reply["provider"]
+                    reply = _scrub_unavailable_stock_claims(
+                        reply, verified_products
+                    )
                 except Exception as exc:
                     from app.services.observability import log_event as _log_event
 

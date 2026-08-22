@@ -86,6 +86,7 @@ class DurableAlertDeliveryWorker:
             fired = [
                 *evaluate_breaker_rule(all_breaker_states()),
                 *evaluate_outbox_rule(OutboxService(db).counts()),
+                *self._evaluate_social_sla_rule(db),
             ]
         enqueued = 0
         duplicates = 0
@@ -103,6 +104,52 @@ class DurableAlertDeliveryWorker:
             else:
                 enqueued += 1
         return {"fired": len(fired), "enqueued": enqueued, "duplicates": duplicates}
+
+    def _evaluate_social_sla_rule(self, db: Any) -> list[Any]:
+        """Alerta crítica si hay mensajes sociales fuera de SLA.
+
+        Seguimiento de redes conectado a SS-07: reutiliza la herramienta
+        determinista ``list_social_sla_breaches`` (misma regla que ve el
+        agente social: queja 15 min / WhatsApp 30 / resto 240) y la convierte
+        en alerta durable. La deduplicación por ventana del encolado evita
+        tormentas mientras el backlog persiste.
+        """
+
+        from app.services.deterministic_tools import DeterministicToolsService
+        from app.services.observability import (
+            ALERTS_FIRED,
+            AlertEvent,
+            get_alert_sink,
+            record_metric,
+        )
+
+        try:
+            breaches = DeterministicToolsService(db).list_social_sla_breaches(limit=200)
+        except Exception as exc:  # noqa: BLE001 - la evaluación no debe tumbar el ciclo
+            _LOG.warning("Evaluación de SLA social falló error_type=%s", type(exc).__name__)
+            return []
+        total = int(breaches.get("total") or 0)
+        if total <= 0:
+            return []
+        worst = max(
+            (int(item.get("overdue_minutes") or 0) for item in breaches.get("items", [])),
+            default=0,
+        )
+        alert = AlertEvent(
+            rule_id="social_sla_breach",
+            summary=f"{total} mensaje(s) social(es) fuera de SLA (peor: {worst} min)",
+            severity="critical",
+            details={"total": total, "worst_overdue_minutes": worst},
+        )
+        get_alert_sink().fire(
+            alert.rule_id,
+            alert.summary,
+            severity=alert.severity,
+            total=total,
+            worst_overdue_minutes=worst,
+        )
+        record_metric(ALERTS_FIRED, rule_id=alert.rule_id, severity=alert.severity)
+        return [alert]
 
     def _cycle(self) -> dict[str, Any]:
         from app.services.alert_delivery import deliver_pending

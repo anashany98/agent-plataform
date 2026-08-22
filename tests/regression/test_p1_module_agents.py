@@ -483,7 +483,12 @@ def test_supervision_idle_agent_has_zero_calls_and_no_actions(agent_env):
     assert row["summary"]["calls"] == 0
     assert row["summary"]["last_activity_at"] is None
     assert row["recent_actions"] == []
-    assert set(row["authorized_tools"]) == {"rag_search"}
+    assert set(row["authorized_tools"]) == {
+        "rag_search",
+        "search_wiki",
+        "get_seo_overview",
+        "list_landing_pages",
+    }
 
 
 def test_supervision_requires_auth_and_accepts_viewer(agent_env):

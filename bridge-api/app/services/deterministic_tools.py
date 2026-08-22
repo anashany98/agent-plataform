@@ -23,15 +23,19 @@ from app.models.models import (
     Customer,
     EmailTrackingEvent,
     InvoiceDraft,
+    LandingPage,
     Lead,
     Opportunity,
     Order,
     PipelineStage,
     Product,
     Quote,
+    SEOProject,
+    SocialChannel,
     SocialMessage,
     SocialTriage,
     StockReservation,
+    WikiPage,
 )
 from sqlalchemy import and_, func, or_, update
 from sqlalchemy.exc import IntegrityError
@@ -1848,6 +1852,172 @@ class DeterministicToolsService:
             "pending_triage": int(pending),
             "avg_score_social": round(float(avg_score), 2),
         }
+
+    # ---------------------------------------------------------------------
+    # Mejoras de agentes (SEO / wiki / landing / social SLA): herramientas
+    # read-only deterministas. El ORM aplica el filtrado por installation_id
+    # (do_orm_execute), así que cada consulta queda dentro del tenant.
+    # ---------------------------------------------------------------------
+
+    def search_wiki(
+        self,
+        *,
+        query: str | None = None,
+        status: str | None = "published",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Busca páginas de la wiki (agente content_agent)."""
+
+        safe_limit = max(1, min(int(limit or 20), 100))
+        db_query = self.db.query(WikiPage)
+        normalized_status = (status or "").strip()
+        if normalized_status:
+            db_query = db_query.filter(WikiPage.status == normalized_status)
+        needle = (query or "").strip()
+        if needle:
+            like = f"%{needle.lower()}%"
+            db_query = db_query.filter(
+                or_(
+                    func.lower(WikiPage.title).like(like),
+                    func.lower(WikiPage.content).like(like),
+                )
+            )
+        rows = (
+            db_query.order_by(WikiPage.updated_at.desc(), WikiPage.id.asc())
+            .limit(safe_limit)
+            .all()
+        )
+        return {
+            "items": [
+                {
+                    "id": row.id,
+                    "slug": row.slug,
+                    "title": row.title,
+                    "status": row.status,
+                    "version": row.version,
+                    "updated_at": (
+                        row.updated_at.isoformat() if row.updated_at else None
+                    ),
+                }
+                for row in rows
+            ],
+            "total": len(rows),
+        }
+
+    def get_seo_overview(self) -> dict[str, Any]:
+        """Panorama de contenido/SEO: proyectos SEO, landings y wiki por estado."""
+
+        def _counts(model: Any, field: Any) -> dict[str, int]:
+            rows = self.db.query(field, func.count(model.id)).group_by(field).all()
+            return {str(status): int(count) for status, count in rows}
+
+        return {
+            "seo_projects_by_status": _counts(SEOProject, SEOProject.status),
+            "landing_pages_by_status": _counts(LandingPage, LandingPage.status),
+            "wiki_pages_by_status": _counts(WikiPage, WikiPage.status),
+        }
+
+    def list_landing_pages(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Landings (agente content_agent): listado con estado de aprobación."""
+
+        safe_limit = max(1, min(int(limit or 50), 200))
+        query = self.db.query(LandingPage)
+        normalized_status = (status or "").strip()
+        if normalized_status:
+            query = query.filter(LandingPage.status == normalized_status)
+        rows = (
+            query.order_by(LandingPage.updated_at.desc(), LandingPage.id.asc())
+            .limit(safe_limit)
+            .all()
+        )
+        return {
+            "items": [
+                {
+                    "id": row.id,
+                    "slug": row.slug,
+                    "title": row.title,
+                    "status": row.status,
+                    "version": row.version,
+                    "approved_at": (
+                        row.approved_at.isoformat() if row.approved_at else None
+                    ),
+                }
+                for row in rows
+            ],
+            "total": len(rows),
+        }
+
+    def list_social_sla_breaches(
+        self,
+        *,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Mensajes sociales que superaron su SLA de primera respuesta.
+
+        Regla idéntica a la del pipeline de escucha: queja 15 min,
+        WhatsApp 30 min, resto 240 min desde la creación del mensaje y
+        mientras siga sin respuesta (``new``/``in_process``).
+        """
+
+        from app.installation_context import get_current_installation_id
+
+        now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
+        pending_statuses = ("new", "in_process")
+        triages = {
+            triage.message_id: triage
+            for triage in self.db.query(SocialTriage).all()
+        }
+        channels = {
+            channel.id: channel
+            for channel in self.db.query(SocialChannel).all()
+        }
+        breaches: list[dict[str, Any]] = []
+        safe_limit = max(1, min(int(limit or 50), 200))
+        rows = (
+            self.db.query(SocialMessage)
+            .filter(SocialMessage.status.in_(pending_statuses))
+            .order_by(SocialMessage.created_at.asc(), SocialMessage.id.asc())
+            .limit(500)
+            .all()
+        )
+        for row in rows:
+            created = row.created_at
+            if created is None:
+                continue
+            channel = channels.get(row.channel_id)
+            triage = triages.get(row.id)
+            intent = triage.intent if triage is not None else "consulta"
+            if intent == "queja":
+                sla_minutes = 15
+            elif channel is not None and channel.channel == "whatsapp":
+                sla_minutes = 30
+            else:
+                sla_minutes = 240
+            due_at = created + datetime.timedelta(minutes=sla_minutes)
+            if now > due_at:
+                overdue_minutes = int((now - due_at).total_seconds() // 60)
+                breaches.append(
+                    {
+                        "id": row.id,
+                        "channel_id": row.channel_id,
+                        "channel": channel.channel if channel is not None else None,
+                        "intent": intent,
+                        "sender_handle": row.sender_handle,
+                        "lead_id": row.lead_id,
+                        "created_at": created.isoformat(),
+                        "sla_minutes": sla_minutes,
+                        "overdue_minutes": overdue_minutes,
+                    }
+                )
+                if len(breaches) >= safe_limit:
+                    break
+        return {"installation_id": get_current_installation_id(), "items": breaches, "total": len(breaches)}
+
 
     def list_campaigns(
         self,
