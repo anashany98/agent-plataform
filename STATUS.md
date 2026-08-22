@@ -1,5 +1,19 @@
 # Estado autoritativo del proyecto
 
+> **Observabilidad externa y agentes ampliados (2026-08-22):** filas
+> **T-080/T-081**, VERIFIED — SS-07 cerrado con alertas durables
+> (`alert_deliveries` + worker que evalúa breakers/DLQ/SLA-social cada
+> ciclo y entrega por webhook HMAC/email con backoff; `/metrics/prometheus`
+> para scraping; producción fail-closed sin canal de alertas). Agentes de
+> módulo ampliados: content_agent (wiki/SEO/landings), social_agent y
+> ceo_agent (incumplimientos de SLA); SLA vencido dispara alerta crítica
+> deduplicada. G-03: post-filtro determinista impide afirmar disponibilidad
+> de agotados en los 5 puntos LLM del chat. Herramienta de evidencia SS-06
+> (`scripts/load_test.py`) probada en humo real: 2.583 req / 0 errores /
+> p95 10,3 ms. Corpus **773 passed / 12 skipped**; gates D-030 PASS; CI
+> `production-gates.yml` verde en los 6 jobs incluida construcción de
+> imágenes con Trivy/SBOM (runs `32538552370`→`32539504544`).
+
 > **Endurecimiento de arranque, dev-ops y modularización (2026-08-21):**
 > filas **T-076→T-079** — B-03/B-04/B-05 cerrados (INSTALLATION_ID
 > fail-closed, seed a lifespan, logging en excepciones tragadas), B-06

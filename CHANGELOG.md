@@ -2,6 +2,40 @@
 
 Todos los cambios relevantes de la remediación se documentan aquí. El proyecto adopta SemVer cuando exista una primera candidata reproducible.
 
+## [Observabilidad externa, agentes por módulo ampliados y verdad de stock — 2026-08-22]
+
+- **SS-07 · Alertas durables (T-080):** nueva tabla `alert_deliveries`
+  (migración 0027) y worker durable que cada ciclo evalúa reglas sobre el
+  estado real (circuit breakers, DLQ del outbox, SLA de escucha social),
+  persiste las alertas (sobreviven reinicios, dedup por ventana) y las
+  entrega por webhook firmado (HMAC SHA256 + tolerancia anti-replay) y/o
+  email vía el proveedor configurado, con reintentos exponenciales hasta
+  estado `dead`. Nuevo endpoint `/metrics/prometheus` (token dedicado o
+  sesión admin) para scraping por Prometheus/vmagent. Producción es
+  fail-closed: exige worker de alertas activo y al menos un canal.
+- **Mejoras de agentes por módulo (T-081):** `content_agent` incorpora
+  `search_wiki`, `get_seo_overview` y `list_landing_pages`; `social_agent`
+  y `ceo_agent` incorporan `list_social_sla_breaches` (regla idéntica a la
+  del pipeline: queja 15 min / WhatsApp 30 / resto 240). Un SLA vencido
+  dispara ahora una alerta crítica deduplicada hacia los canales T-080.
+- **G-03 · Verdad de stock en el chat:** post-filtro determinista
+  `_scrub_unavailable_stock_claims` aplicado en los 5 puntos de respuesta
+  LLM con contexto de productos verificados: si la respuesta menciona un
+  producto sin stock, añade siempre nota correctora veraz (residual de
+  T-038/T-040).
+- **SS-06 · Herramienta de evidencia de carga:** `scripts/load_test.py`
+  (tráfico de lectura acotado, informe p50/p95/p99/máx por endpoint,
+  umbral de errores, informe JSON). Humo real contra instancia local:
+  2.583 peticiones / 0 errores / p95 10,3 ms.
+- Correcciones colaterales: orden correcto del job PostgreSQL en CI
+  (migraciones antes que invariantes; ambos modos con BD fresca), spool de
+  email hermético en tests (`AUTOMATION_EMAIL_DIR` al tmp), gates pytest
+  listan todos los FAILED, portal formateado con prettier, presupuesto
+  diario LLM atómico (UPDATE condicional reserva/settle/libera).
+- Corpus **773 passed / 12 skipped**; gates D-030 PASS (ratchet 132≤133);
+  CI `production-gates.yml` verde en los 6 jobs incluida construcción de
+  imágenes con Trivy y SBOM.
+
 ## [Endurecimiento de arranque, dev-ops y modularización — 2026-08-21]
 
 - **Seguridad de arranque (T-076):** `INSTALLATION_ID="development-local"` ahora es rechazado en producción (fail-closed, B-03); `seed_database()`/`AUTO_CREATE_SCHEMA` se ejecutan en el lifespan vía `initialize_database()` y no en import-time (B-04); 9 bloques `except Exception` que tragaban la causa raíz ahora registran warning estructurado (B-05). Test nuevo en `test_p1_secure_env.py`.
