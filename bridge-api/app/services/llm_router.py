@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 from fastapi import HTTPException
+from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -158,49 +159,65 @@ class LLMRouterService:
             settings.LLM_MAX_OUTPUT_TOKENS,
         )
 
-    def _lock_daily_budget(self, maximum_cost: Decimal) -> DailyLLMBudget:
-        budget_date = dt.datetime.now(dt.UTC).date()
-        row = (
-            self.db.query(DailyLLMBudget)
-            .filter(DailyLLMBudget.budget_date == budget_date)
-            .with_for_update()
-            .first()
-        )
-        if row is None:
-            try:
-                with self.db.begin_nested():
-                    self.db.add(
-                        DailyLLMBudget(
-                            budget_date=budget_date,
-                            spent_usd=Decimal("0"),
-                        )
-                    )
-                    self.db.flush()
-            except IntegrityError:
-                pass
-            row = (
-                self.db.query(DailyLLMBudget)
-                .filter(DailyLLMBudget.budget_date == budget_date)
-                .with_for_update()
-                .one()
-            )
+    def _budget_date(self) -> dt.date:
+        return dt.datetime.now(dt.UTC).date()
+
+    def _reserve_daily_budget(self, maximum_cost: Decimal) -> bool:
+        """Reserva atómicamente ``maximum_cost`` del presupuesto del día.
+
+        UPDATE condicional (compare-and-increment): admite solo si el gasto
+        reservado no supera el límite. Sin locks retenidos a través de
+        awaits (lección del incidente de event-loop congelado) y sin la
+        ventana check-act que permitía a dos peticiones concurrentes pasar
+        ambas el control con SELECT FOR UPDATE + commit previo.
+        """
+
+        budget_date = self._budget_date()
         limit = Decimal(str(settings.LLM_MAX_DAILY_COST_USD))
-        if Decimal(row.spent_usd or 0) + maximum_cost > limit:
-            # Libera el lock antes de propagar: una transacción abierta con
-            # FOR UPDATE retendría la fila y bloquearía al siguiente
-            # ``_lock_daily_budget`` (síncrono en un handler async) congelando
-            # el event loop entero.
-            self.db.rollback()
-            raise HTTPException(status_code=429, detail="Límite diario de gasto de IA alcanzado")
-        # Libera el lock FOR UPDATE AHORA, antes de la llamada al proveedor:
-        # retenerlo a través del await del LLM dejaba la transacción abierta
-        # mientras la segunda petición esperaba el lock en una llamada síncrona
-        # dentro del event loop → bridge colgado (healthchecks caídos 5+ min,
-        # chat de la tienda muerto; reproducido en vivo). El coste real se
-        # registra en la transacción final de ``generate_response``, así que
-        # el lock no necesita abarcar la llamada de red.
+
+        def _try_reserve() -> int:
+            result = self.db.execute(
+                update(DailyLLMBudget)
+                .where(
+                    DailyLLMBudget.budget_date == budget_date,
+                    DailyLLMBudget.spent_usd + maximum_cost <= limit,
+                )
+                .values(
+                    spent_usd=DailyLLMBudget.spent_usd + maximum_cost,
+                    updated_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
+                )
+            )
+            self.db.commit()
+            return int(result.rowcount or 0)
+
+        if _try_reserve() == 1:
+            return True
+        # Sin fila del día: crearla (idempotente bajo la PK compuesta) y
+        # reintentar la reserva condicional.
+        try:
+            with self.db.begin_nested():
+                self.db.add(DailyLLMBudget(budget_date=budget_date, spent_usd=Decimal("0")))
+                self.db.flush()
+        except IntegrityError:
+            pass
         self.db.commit()
-        return row
+        return _try_reserve() == 1
+
+    def _settle_daily_budget(self, reserved_ceiling: Decimal, actual_cost: Decimal) -> None:
+        """Reconcilia la reserva con el coste real (+gasto/−devolución)."""
+
+        delta = actual_cost - reserved_ceiling
+        if delta == 0:
+            return
+        self.db.execute(
+            update(DailyLLMBudget)
+            .where(DailyLLMBudget.budget_date == self._budget_date())
+            .values(
+                spent_usd=DailyLLMBudget.spent_usd + delta,
+                updated_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
+            )
+        )
+        self.db.commit()
 
     async def generate_response(
         self,
@@ -218,7 +235,8 @@ class LLMRouterService:
         errors: list[str] = []
         result: ProviderResult | None = None
         selected_rate: PricingRate | None = None
-        budget_row: DailyLLMBudget | None = None
+        # Techo reservado en el presupuesto diario del candidato elegido
+        # (0 = sin reserva; la reserva es atómica y se reconcilia después).
         reserved_ceiling = Decimal("0")
         pricing_blocked = False
         budget_blocked = False
@@ -226,6 +244,8 @@ class LLMRouterService:
             if not config["provider"] or not config["model"]:
                 errors.append(f"{config['provider'] or 'proveedor'} sin modelo configurado")
                 continue
+            candidate_rate: PricingRate | None = None
+            candidate_ceiling = Decimal("0")
             try:
                 candidate_rate = self._pricing_for(config["provider"], config["model"])
                 candidate_ceiling = self._maximum_request_cost(
@@ -233,20 +253,13 @@ class LLMRouterService:
                     prompt,
                     system_prompt,
                 )
-                candidate_budget_row = (
-                    self._lock_daily_budget(candidate_ceiling)
-                    if candidate_ceiling > 0
-                    else None
-                )
+                if candidate_ceiling > 0 and not self._reserve_daily_budget(candidate_ceiling):
+                    budget_blocked = True
+                    errors.append("Límite diario de gasto de IA alcanzado")
+                    continue
             except PricingConfigurationError as exc:
                 pricing_blocked = True
                 errors.append(str(exc))
-                continue
-            except HTTPException as exc:
-                if exc.status_code != 429:
-                    raise
-                budget_blocked = True
-                errors.append(str(exc.detail))
                 continue
             try:
                 result = await self._call_provider(config["provider"], config["model"], prompt, system_prompt)
@@ -259,10 +272,13 @@ class LLMRouterService:
                     )
                 selected_rate = candidate_rate
                 reserved_ceiling = candidate_ceiling
-                budget_row = candidate_budget_row
                 break
             except ProviderUnavailable as exc:
                 errors.append(str(exc))
+                if candidate_ceiling > 0:
+                    # Libera la reserva del candidato fallido antes de
+                    # probar el siguiente perfil.
+                    self._settle_daily_budget(candidate_ceiling, Decimal("0"))
 
         if result is None and settings.ALLOW_MOCK_LLM and not pricing_blocked and not budget_blocked:
             result = ProviderResult(
@@ -276,6 +292,9 @@ class LLMRouterService:
             )
             selected_rate = self._pricing_for(result.provider, result.model)
         if result is None:
+            if reserved_ceiling > 0:
+                # Ningún proveedor disponible: libera la reserva vigente.
+                self._settle_daily_budget(reserved_ceiling, Decimal("0"))
             self._audit_failure(
                 correlation_id,
                 agent_id,
@@ -335,12 +354,13 @@ class LLMRouterService:
             or result.completion_tokens > settings.LLM_MAX_OUTPUT_TOKENS
         )
         billing_anomaly = bool(
-            budget_row is not None
+            reserved_ceiling > 0
             and (cost > reserved_ceiling or usage_contract_violation)
         )
-        if budget_row is not None:
-            budget_row.spent_usd = Decimal(budget_row.spent_usd or 0) + cost
-            budget_row.updated_at = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+        if reserved_ceiling > 0:
+            # Reconcilia la reserva con el coste real (atómico, sin
+            # lost-update entre sesiones concurrentes).
+            self._settle_daily_budget(reserved_ceiling, cost)
         audit = AuditLog(
             correlation_id=correlation_id,
             agent_id=agent_id,
