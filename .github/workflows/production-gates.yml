@@ -58,7 +58,7 @@ jobs:
 
       - name: Upload coverage evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: backend-coverage
           path: coverage.xml
@@ -206,7 +206,7 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
 
       - name: Upload portal build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: portal-dist
           path: portal/dist
@@ -340,7 +340,7 @@ jobs:
           sha256sum sbom-bridge.cdx.json sbom-portal.cdx.json image-manifest.json > SHA256SUMS
 
       - name: Upload supply-chain evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: container-evidence
           path: |
