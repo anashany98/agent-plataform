@@ -8,7 +8,7 @@ COPY tsconfig.json vite.config.ts index.html ./
 COPY src ./src
 RUN npm run build
 
-FROM nginx:1.30.4-alpine3.24@sha256:97d490c12ba55b4946b01546d1c3ed324e8d41ab1c9fcb2a616aa470620e5b46
+FROM nginx:1.31.7-alpine3.24@sha256:892bb2152464f0c5d8972593a5f5afaf8054552580b699d95f8ff4af08c2d33d
 ARG RELEASE_VERSION=dev
 ARG SOURCE_COMMIT=unknown
 LABEL org.opencontainers.image.version="${RELEASE_VERSION}" \
